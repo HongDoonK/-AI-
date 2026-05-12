@@ -2,8 +2,8 @@ import json
 import pandas as pd
 
 
-POLICY_FILE = "청년정책 api.txt"
-CENTER_FILE = "청년센터 api.txt"
+POLICY_FILE = "data/raw/청년정책 api.txt"
+CENTER_FILE = "data/raw/청년센터 api.txt"
 
 
 def load_json_txt(file_name):
@@ -91,7 +91,7 @@ policy_df["search_text"] = (
     policy_df["target_condition"].astype(str)
 )
 
-policy_df.to_csv("youth_policy_clean.csv", index=False, encoding="utf-8-sig")
+policy_df.to_csv("data/processed/youth_policy_clean.csv", index=False, encoding="utf-8-sig")
 
 print("youth_policy_clean.csv 생성 완료")
 print("정책 개수:", len(policy_df))
@@ -129,7 +129,7 @@ if "center_id" in center_df.columns:
 else:
     center_df = center_df.drop_duplicates()
 
-center_df.to_csv("youth_center_clean.csv", index=False, encoding="utf-8-sig")
+center_df.to_csv("data/processed/youth_center_clean.csv", index=False, encoding="utf-8-sig")
 
 print("youth_center_clean.csv 생성 완료")
 print("센터 개수:", len(center_df))
