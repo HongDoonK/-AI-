@@ -5,9 +5,9 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 
-CSV_FILE = "youth_policy_clean.csv"
-EMBEDDING_FILE = "policy_embeddings.npy"
-FAISS_INDEX_FILE = "faiss_index.index"
+CSV_FILE = "data/processed/youth_policy_clean.csv"
+EMBEDDING_FILE = "data/index/policy_embeddings.npy"
+FAISS_INDEX_FILE = "data/index/faiss_index.index"
 
 EMBEDDING_MODEL_NAME = "jhgan/ko-sroberta-multitask"
 
