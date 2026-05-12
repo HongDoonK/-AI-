@@ -7,8 +7,8 @@ from extract_user_condition import extract_user_condition
 from filter_policy import filter_policies
 
 
-POLICY_CSV = "youth_policy_clean.csv"
-FAISS_INDEX_FILE = "faiss_index.index"
+POLICY_CSV = "data/processed/youth_policy_clean.csv"
+FAISS_INDEX_FILE = "data/index/faiss_index.index"
 
 EMBEDDING_MODEL_NAME = "jhgan/ko-sroberta-multitask"
 LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
