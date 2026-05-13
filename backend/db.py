@@ -6,6 +6,7 @@
 import sqlite3
 import os
 from backend.config import POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS, CENTER_COLUMNS
+from backend.region_map import get_region_code
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "youth_policy.db")
 
@@ -113,6 +114,20 @@ def get_centers_by_region(region: str) -> list:
             WHERE {c['center_ctpv_nm']} LIKE ?
             OR {c['center_sgg_nm']} LIKE ?""",
         (f"%{region}%", f"%{region}%")
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def get_policies_by_region(sido: str, sigungu: str) -> list:
+    code = get_region_code(sido, sigungu)
+    if not code:
+        return []
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM policies_processed WHERE region LIKE ?",
+        (f"%{code}%",)
     )
     rows = cursor.fetchall()
     conn.close()
