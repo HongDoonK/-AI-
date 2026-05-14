@@ -1,21 +1,40 @@
+import sqlite3
 import pandas as pd
 import faiss
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+
 from extract_user_condition import extract_user_condition
 from filter_policy import filter_policies
 
 
-POLICY_CSV = "data/processed/youth_policy_clean.csv"
+DB_FILE = "data/youth_policy.db"
+TABLE_NAME = "policies_processed"
+
 FAISS_INDEX_FILE = "data/index/faiss_index.index"
 
 EMBEDDING_MODEL_NAME = "jhgan/ko-sroberta-multitask"
 LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 
 
+def load_policy_df():
+    conn = sqlite3.connect(DB_FILE)
+
+    query = f"""
+    SELECT *
+    FROM {TABLE_NAME}
+    ORDER BY policy_id
+    """
+
+    policy_df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    return policy_df
+
+
 print("데이터 로드 중...")
-policy_df = pd.read_csv(POLICY_CSV)
+policy_df = load_policy_df()
 index = faiss.read_index(FAISS_INDEX_FILE)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -43,7 +62,7 @@ llm = AutoModelForCausalLM.from_pretrained(
 )
 
 
-def search_top5_policies(user_input, top_k=5):
+def search_top_policies(user_input, top_k=5):
     query_embedding = embedding_model.encode(
         [user_input],
         convert_to_numpy=True
@@ -53,28 +72,45 @@ def search_top5_policies(user_input, top_k=5):
 
     scores, indices = index.search(query_embedding, top_k)
 
-    top5 = policy_df.iloc[indices[0]].copy()
-    top5["score"] = scores[0]
+    top_policies = policy_df.iloc[indices[0]].copy()
+    top_policies["score"] = scores[0]
 
-    return top5
+    return top_policies
 
 
-def make_policy_context(top5_df):
+def make_policy_context(top_df):
     policy_texts = []
 
-    for _, row in top5_df.iterrows():
+    for _, row in top_df.iterrows():
         text = f"""
+정책ID: {row.get('policy_id', '')}
 정책명: {row.get('policy_name', '')}
 키워드: {row.get('keyword', '')}
-분야: {row.get('category_large', '')} / {row.get('category_middle', '')}
+분야: {row.get('category_main', '')} / {row.get('category_sub', '')}
 정책 설명: {row.get('description', '')}
 지원 내용: {row.get('support_content', '')}
+지원 방식: {row.get('pvsn_method', '')}
 신청 기간: {row.get('apply_period', '')}
 신청 방법: {row.get('apply_method', '')}
-신청 URL: {row.get('apply_url', '')}
-참고 URL: {row.get('reference_url', '')}
-추가 조건: {row.get('extra_condition', '')}
-대상 조건: {row.get('target_condition', '')}
+신청 URL: {row.get('application_url', '')}
+참고 URL 1: {row.get('ref_url1', '')}
+참고 URL 2: {row.get('ref_url2', '')}
+제출 서류: {row.get('submit_docs', '')}
+운영 기관: {row.get('oper_inst', '')}
+주관 기관: {row.get('institution', '')}
+나이 조건: {row.get('min_age', '')}세 ~ {row.get('max_age', '')}세
+나이 제한 여부: {row.get('age_limit', '')}
+혼인 조건: {row.get('marriage_status', '')}
+소득 조건: {row.get('income_type', '')} / {row.get('income_min', '')} ~ {row.get('income_max', '')}
+소득 기타 조건: {row.get('income_etc', '')}
+신청 조건: {row.get('apply_condition', '')}
+제외 대상: {row.get('excluded_target', '')}
+지역 코드: {row.get('region', '')}
+전공 조건: {row.get('major_cd', '')}
+취업 조건: {row.get('job_cd', '')}
+학력 조건: {row.get('school_cd', '')}
+특화 조건: {row.get('special_cd', '')}
+기타: {row.get('etc', '')}
 유사도 점수: {row.get('score', '')}
 """
         policy_texts.append(text)
@@ -82,7 +118,7 @@ def make_policy_context(top5_df):
     return "\n---\n".join(policy_texts)
 
 
-def generate_answer(user_input, top5_df):
+def generate_answer(user_input, user_condition, top5_df):
     policy_context = make_policy_context(top5_df)
 
     prompt = f"""
@@ -105,6 +141,8 @@ LLM이 추출한 사용자 조건:
 4. 사용자가 바로 행동할 수 있도록 체크리스트를 포함해라.
 5. 답변은 한국어로 작성해라.
 6. 정책별로 핵심만 정리해라.
+7. 정책 URL이 있으면 함께 제공해라.
+8. 조건이 맞는지 확실하지 않은 항목은 단정하지 마라.
 
 출력 형식:
 1. 사용자 조건 요약
@@ -141,10 +179,13 @@ LLM이 추출한 사용자 조건:
         repetition_penalty=1.05
     )
 
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    # 모델 출력에 프롬프트가 같이 섞여 나오면 마지막 assistant 답변 중심으로 보기 위한 단순 처리
-    return response
+    # Qwen chat template 결과에서 assistant 답변만 최대한 분리
+    if "assistant" in decoded:
+        decoded = decoded.split("assistant")[-1].strip()
+
+    return decoded
 
 
 def recommend_policy(user_input):
@@ -175,15 +216,16 @@ def recommend_policy(user_input):
 if __name__ == "__main__":
     user_input = input("청년정책 질문을 입력하세요: ")
 
-    top5, answer = recommend_policy(user_input)
+    user_condition, top5, answer = recommend_policy(user_input)
 
     print("\n===== 검색된 Top 5 정책 =====")
 
     cols = [
+        "policy_id",
         "policy_name",
         "keyword",
-        "category_large",
-        "category_middle",
+        "category_main",
+        "category_sub",
         "apply_period",
         "score",
     ]
