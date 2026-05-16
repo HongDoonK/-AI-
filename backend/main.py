@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 # 우리가 만든 모듈
 from backend.models import RecommendRequest, RecommendResponse
 from backend.db import get_centers_by_region
+from backend.db import save_user, get_user
+from backend.models import UserRequest, UserResponse
 
 # AI 모듈(ai/recommender.py)이 아직 비어있으므로 임시 mock 함수 사용
 # 6단계에서 아래 한 줄만 수정하면 실제 AI 모듈로 교체됨
@@ -109,3 +111,22 @@ def recommend(request: RecommendRequest):
             status_code=500,
             detail=f"추천 처리 중 오류 발생: {str(e)}",
         )
+# ════════════════════════════════════════════════════════════════
+# 5. USer
+# ════════════════════════════════════════════════════════════════ 
+@app.post("/user", response_model=UserResponse)
+def create_user(request: UserRequest):
+    try:
+        user_id = save_user(request.model_dump())
+        user = get_user(user_id)
+        return user
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/user/{user_id}", response_model=UserResponse)
+def read_user(user_id: str):
+    user = get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    return user

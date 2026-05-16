@@ -5,6 +5,7 @@
 
 import sqlite3
 import os
+import uuid
 from backend.config import POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS, CENTER_COLUMNS
 from backend.region_map import get_region_code
 
@@ -99,6 +100,21 @@ def create_tables():
         )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id           TEXT PRIMARY KEY,
+        age               INTEGER,
+        region_sido       TEXT,
+        region_sigungu    TEXT,
+        status            TEXT,
+        interest          TEXT,
+        employment_status TEXT,
+        income            TEXT,
+        housing_status    TEXT,
+        created_at        TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("✅ DB 테이블 생성 완료 (policies, policies_processed, centers)")
@@ -132,6 +148,41 @@ def get_policies_by_region(sido: str, sigungu: str) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+def save_user(user_data: dict) -> str:
+    """사용자 조건 저장. user_id 반환"""
+    user_id = str(uuid.uuid4())
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO users (
+            user_id, age, region_sido, region_sigungu,
+            status, interest, employment_status, income, housing_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        user_data.get("age"),
+        user_data.get("region_sido"),
+        user_data.get("region_sigungu"),
+        user_data.get("status"),
+        user_data.get("interest"),
+        user_data.get("employment_status"),
+        user_data.get("income"),
+        user_data.get("housing_status"),
+    ))
+    conn.commit()
+    conn.close()
+    return user_id
+
+
+def get_user(user_id: str) -> dict | None:
+    """user_id로 사용자 조건 조회. 없으면 None 반환"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 # ── 직접 실행 시 테이블 생성 테스트 ──────────────────────────

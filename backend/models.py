@@ -100,3 +100,28 @@ class RecommendResponse(BaseModel):
         default_factory=list,
         description="사용자 지역 기반 청년센터 목록",
     )
+# ════════════════════════════════════════════════════════════════
+# 3. UserRequest, UserResponse
+# ════════════════════════════════════════════════════════════════
+
+class UserRequest(BaseModel):
+    age:               int | None = None
+    region_sido:       str | None = None
+    region_sigungu:    str | None = None
+    status:            str | None = None
+    interest:          str | None = None
+    employment_status: str | None = None
+    income:            str | None = None
+    housing_status:    str | None = None
+
+class UserResponse(BaseModel):
+    user_id:           str
+    age:               int | None
+    region_sido:       str | None
+    region_sigungu:    str | None
+    status:            str | None
+    interest:          str | None
+    employment_status: str | None
+    income:            str | None
+    housing_status:    str | None
+    created_at:        str | None
