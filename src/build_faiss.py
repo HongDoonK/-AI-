@@ -1,3 +1,5 @@
+import os
+import sqlite3
 import pandas as pd
 import numpy as np
 import faiss
@@ -5,11 +7,28 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 
-CSV_FILE = "data/processed/youth_policy_clean.csv"
+DB_FILE = "data/youth_policy.db"
+TABLE_NAME = "policies_processed"
+
 EMBEDDING_FILE = "data/index/policy_embeddings.npy"
 FAISS_INDEX_FILE = "data/index/faiss_index.index"
 
 EMBEDDING_MODEL_NAME = "jhgan/ko-sroberta-multitask"
+
+
+def load_policy_df():
+    conn = sqlite3.connect(DB_FILE)
+
+    query = f"""
+    SELECT *
+    FROM {TABLE_NAME}
+    ORDER BY policy_id
+    """
+
+    policy_df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    return policy_df
 
 
 def main():
@@ -17,10 +36,12 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    policy_df = pd.read_csv(CSV_FILE)
+    os.makedirs("data/index", exist_ok=True)
+
+    policy_df = load_policy_df()
 
     if "search_text" not in policy_df.columns:
-        raise ValueError("youth_policy_clean.csv에 search_text 컬럼이 없습니다.")
+        raise ValueError(f"{TABLE_NAME} 테이블에 search_text 컬럼이 없습니다.")
 
     policy_df["search_text"] = policy_df["search_text"].fillna("").astype(str)
 
