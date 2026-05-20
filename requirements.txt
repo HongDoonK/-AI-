@@ -2,6 +2,10 @@ pandas
 numpy
 faiss-cpu
 sentence-transformers
+fastapi
+uvicorn
+pydantic
+scikit-learn
 openai
 python-dotenv
 tqdm
