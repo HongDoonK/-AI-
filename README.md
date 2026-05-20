@@ -34,21 +34,6 @@ requirements.txt       백엔드 Python 의존성
 .env                   API 키 등 로컬 환경 변수
 ```
 
-## 삭제한 항목
-
-이번 정리에서 현재 실행 흐름에 필요 없는 파일과 폴더를 제거했습니다.
-
-- `src/`: 예전 CSV/FAISS/LLM 실험 코드입니다. 현재 `/recommend`는 `ai/recommender.py`를 사용합니다.
-- `prompts/`: 예전 LLM 프롬프트 파일입니다. 현재 조건 추출과 응답 생성은 `ai/` 내부 로직으로 처리합니다.
-- `tests/`: 이전 `src/` 구조 기준 테스트라 현재 코드와 맞지 않습니다.
-- `app.py`: 예전 CLI 실행 파일이며 FastAPI 서버는 `backend/main.py`를 사용합니다.
-- `backend/mock_ai.py`: 임시 추천 함수였고 현재는 `ai.recommender.recommend_policy`로 교체되었습니다.
-- `data/raw/`, `data/processed/`: API 원본 텍스트와 CSV 산출물입니다. 현재 추천은 CSV가 아니라 `data/youth_policy.db`의 `policies_processed`를 읽습니다.
-- `data/index/`: 예전 FAISS 산출물입니다. 현재 기본 검색은 안정적인 키워드/조건 기반 fallback으로 동작합니다.
-- `frontend/dist/`: 빌드 결과물입니다. `npm run build`로 언제든 다시 생성됩니다.
-- `frontend/node_modules/`: 설치 산출물입니다. `npm install`로 다시 생성됩니다.
-- `backend/__pycache__/`, `ai/__pycache__/`: Python 캐시입니다. 실행 시 자동 생성됩니다.
-- 루트 `package-lock.json`: 루트에는 `package.json`이 없어 불필요합니다. 프론트엔드용 `frontend/package-lock.json`은 유지했습니다.
 - `RUN_BACKEND.md`: README와 내용이 중복되어 제거했습니다.
 
 ## DB 구조
