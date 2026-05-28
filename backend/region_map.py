@@ -318,3 +318,10 @@ def get_sido_list() -> list:
 def get_sigungu_list(sido: str) -> list:
     """해당 시도의 자치구 목록 반환 (Streamlit 드롭다운용)"""
     return list(REGION_CODE_MAP.get(sido, {}).keys())
+
+# 역방향 매핑: 법정동 코드 → 시도명
+# 예: "11110" → "서울", "26110" → "부산"
+CODE_TO_SIDO = {}
+for sido, sigungu_dict in REGION_CODE_MAP.items():
+    for code in sigungu_dict.values():
+        CODE_TO_SIDO[code] = sido

@@ -49,6 +49,7 @@ COL_INCOME_ETC          = "income_etc"          # 소득기타내용
 COL_APPLY_CONDITION     = "apply_condition"     # 추가신청자격조건내용
 COL_EXCLUDED_TARGET     = "excluded_target"     # 참여제한대상내용
 COL_REGION              = "region"              # 정책거주지역코드
+COL_REGION_NAME         = "region_name"         # 법정동코드 지역명 매칭
 COL_MAJOR_CD            = "major_cd"            # 정책전공요건코드
 COL_JOB_CD              = "job_cd"              # 정책취업요건코드
 COL_SCHOOL_CD           = "school_cd"           # 정책학력요건코드
@@ -113,6 +114,7 @@ POLICY_COLUMNS = {
     "apply_condition":     COL_APPLY_CONDITION,
     "excluded_target":     COL_EXCLUDED_TARGET,
     "region":              COL_REGION,
+    "region_name":         COL_REGION_NAME,
     "major_cd":            COL_MAJOR_CD,
     "job_cd":              COL_JOB_CD,
     "school_cd":           COL_SCHOOL_CD,

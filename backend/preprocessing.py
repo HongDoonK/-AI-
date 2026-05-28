@@ -6,8 +6,7 @@
 
 from backend.db import get_connection
 from backend.config import POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS
-
-
+from backend.region_map import REGION_CODE_MAP, CODE_TO_SIDO 
 # ════════════════════════════════════════════════════════════════
 # 코드 변환 딕셔너리 (API코드정보.xlsx 기반)
 # ════════════════════════════════════════════════════════════════
@@ -115,6 +114,29 @@ COLUMN_CODE_MAPS = {
     POLICY_COLUMNS["special_cd"]:        SPECIAL_CD_MAP,
 }
 
+# ════════════════════════════════════════════════════════════════
+# 법정동 코드 → 지역명 변환
+# ════════════════════════════════════════════════════════════════
+
+def convert_region_to_name(region_val) -> str:
+    """
+    법정동 코드를 한국어 지역명으로 변환
+    예: "11110,11140,11680" → "서울"
+    예: "44130,44150"       → "충남"
+    예: "00" 또는 빈값      → "전국"
+    """
+    if not region_val or str(region_val).strip() in ("", "00", "None"):
+        return "전국"
+    
+    codes = [c.strip() for c in str(region_val).split(",")]
+    sidos = []
+    
+    for code in codes:
+        sido = CODE_TO_SIDO.get(code)
+        if sido and sido not in sidos:
+            sidos.append(sido)
+    
+    return ",".join(sidos) if sidos else "전국"
 
 # ════════════════════════════════════════════════════════════════
 # 코드값 → 텍스트 변환
@@ -151,6 +173,7 @@ def make_search_text(row: dict) -> str:
         row.get(p["category_main"]),
         row.get(p["category_sub"]),
         row.get(p["support_content"]),
+        row.get(p["region_name"]),
     ]
     return " ".join([part for part in parts if part])
 
@@ -191,14 +214,15 @@ def preprocess_policies():
     for row in rows:
         row_dict = dict(row)
 
-        # ① 코드 컬럼 → 텍스트 변환
+        # 코드 컬럼 → 텍스트 변환
         for col_name, code_map in COLUMN_CODE_MAPS.items():
             row_dict[col_name] = convert_code(row_dict.get(col_name), code_map)
 
-        # ② 변환된 텍스트로 search_text 생성
+        # 변환된 텍스트로 search_text 생성
         row_dict[p["search_text"]] = make_search_text(row_dict)
+        row_dict[p["region_name"]] = convert_region_to_name(row_dict.get(p["region"]))
 
-        # ③ policies_processed에 저장
+        # policies_processed에 저장
         values = [row_dict.get(col) for col in cols]
         cursor.execute(
             f"INSERT OR REPLACE INTO policies_processed ({col_names}) VALUES ({col_placeholders})",
