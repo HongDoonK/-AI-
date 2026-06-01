@@ -95,6 +95,7 @@ def _build_policies_ddl(table_name: str, columns: dict) -> str:
             {p['apply_condition']}     TEXT,
             {p['excluded_target']}     TEXT,
             {p['region']}              TEXT,
+            {p['region_name']}         TEXT,
             {p['major_cd']}            TEXT,
             {p['job_cd']}              TEXT,
             {p['school_cd']}           TEXT,

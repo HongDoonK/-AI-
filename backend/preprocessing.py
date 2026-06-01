@@ -219,8 +219,8 @@ def preprocess_policies():
             row_dict[col_name] = convert_code(row_dict.get(col_name), code_map)
 
         # 변환된 텍스트로 search_text 생성
-        row_dict[p["search_text"]] = make_search_text(row_dict)
         row_dict[p["region_name"]] = convert_region_to_name(row_dict.get(p["region"]))
+        row_dict[p["search_text"]] = make_search_text(row_dict)
 
         # policies_processed에 저장
         values = [row_dict.get(col) for col in cols]
