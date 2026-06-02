@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  Bot,
   CheckCircle2,
   ExternalLink,
   Loader2,
   LogIn,
   MapPin,
+  MessageCircle,
   Phone,
   Search,
+  Send,
   Sparkles,
   UserRound,
+  X,
 } from 'lucide-react';
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
 const RECOMMEND_URL = `${API_BASE_URL}/recommend`;
+const CHAT_URL = `${API_BASE_URL}/chat`;
 const USER_URL = `${API_BASE_URL}/user`;
 const PROFILE_STORAGE_KEY = 'youth-policy-user-profile';
 
@@ -153,13 +158,13 @@ function LoginPanel({ profile, onLogin, saving }) {
   );
 }
 
-function PolicyCard({ policy, index }) {
+function PolicyCard({ policy, index, onOpenChat }) {
   const checklist = Array.isArray(policy.checklist) ? policy.checklist : [];
   const url = policy.application_url || policy.url || policy.ref_url;
   const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
   const hasEvidence = badges.length > 0 || policy.region_match || policy.domain_label || policy.source_label || policy.match_score_label;
   return (
-    <article className="policy-card">
+    <article className="policy-card" tabIndex="0" onClick={() => onOpenChat(policy)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenChat(policy); }}>
       <div className="policy-head">
         <div><p className="card-eyebrow">추천 정책 {index + 1}</p><h3>{displayValue(policy.policy_name, '정책명 확인 필요')}</h3></div>
         <span className={getPossibilityClass(policy.apply_possibility)}>{displayValue(policy.apply_possibility)}</span>
@@ -169,7 +174,10 @@ function PolicyCard({ policy, index }) {
       <section className="mini-section"><h4>추천 이유</h4><p>{displayValue(policy.reason, '입력 조건과 정책 데이터의 관련성을 기준으로 추천했습니다.')}</p></section>
       {policy.support_content && <section className="mini-section"><h4>지원 내용</h4><p>{policy.support_content}</p></section>}
       {checklist.length > 0 && <section className="mini-section checklist-block"><h4>신청 체크리스트</h4><ul className="check-list">{checklist.map((item, idx) => <li key={`${item}-${idx}`}><CheckCircle2 size={16} /><span>{item}</span></li>)}</ul></section>}
-      {url && <a className="link-button" href={url} target="_blank" rel="noreferrer">신청/참고 링크 열기 <ExternalLink size={15} /></a>}
+      <div className="policy-actions">
+        <button className="ghost-button" type="button" onClick={(event) => { event.stopPropagation(); onOpenChat(policy); }}><MessageCircle size={16} /> AI 상담 시작</button>
+        {url && <a className="link-button" href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>신청/참고 링크 열기 <ExternalLink size={15} /></a>}
+      </div>
     </article>
   );
 }
@@ -191,6 +199,80 @@ function CenterCard({ center }) {
   );
 }
 
+function ChatMessageContent({ content }) {
+  const lines = String(content || '').split('\n');
+  const blocks = [];
+  let checklist = [];
+
+  function flushChecklist() {
+    if (checklist.length > 0) {
+      blocks.push({ type: 'checklist', items: checklist });
+      checklist = [];
+    }
+  }
+
+  lines.forEach((line) => {
+    const match = line.match(/^- \[ \]\s*(.+)$/);
+    if (match) {
+      checklist.push(match[1]);
+      return;
+    }
+    flushChecklist();
+    if (line.trim()) blocks.push({ type: 'text', text: line });
+  });
+  flushChecklist();
+
+  return (
+    <>
+      {blocks.map((block, index) => {
+        if (block.type === 'checklist') {
+          return (
+            <ul className="chat-checklist" key={`checklist-${index}`}>
+              {block.items.map((item, itemIndex) => (
+                <li key={`${item}-${itemIndex}`}>
+                  <CheckCircle2 size={15} />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={`text-${index}`}>{block.text}</p>;
+      })}
+    </>
+  );
+}
+
+function ChatPanel({ policy, messages, input, loading, onInputChange, onSend, onClose }) {
+  if (!policy) return null;
+  return (
+    <section className="chat-panel" aria-label="정책 AI 상담">
+      <div className="chat-header">
+        <div className="chat-title">
+          <Bot size={20} />
+          <div>
+            <p className="card-eyebrow">정책 상담 에이전트</p>
+            <h2>{displayValue(policy.policy_name, '선택한 정책')}</h2>
+          </div>
+        </div>
+        <button className="icon-button" type="button" onClick={onClose} aria-label="상담 닫기"><X size={18} /></button>
+      </div>
+      <div className="chat-messages">
+        {messages.map((message, index) => (
+          <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+            <ChatMessageContent content={message.content} />
+          </div>
+        ))}
+        {loading && <div className="chat-message assistant"><p><Loader2 className="spin inline-icon" size={15} /> 답변을 생성하고 있습니다.</p></div>}
+      </div>
+      <form className="chat-form" onSubmit={onSend}>
+        <input value={input} onChange={(event) => onInputChange(event.target.value)} placeholder="신청 조건, 준비 서류, 다음 단계 등을 물어보세요" />
+        <button className="primary-button icon-submit" type="submit" disabled={loading || !input.trim()} aria-label="메시지 보내기"><Send size={18} /></button>
+      </form>
+    </section>
+  );
+}
+
 export default function App() {
   const [userInput, setUserInput] = useState('');
   const [profile, setProfile] = useState(() => {
@@ -201,6 +283,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [selectedPolicy, setSelectedPolicy] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
   const data = useMemo(() => normalizeResult(result), [result]);
 
   async function handleLogin(profileInput) {
@@ -236,11 +322,57 @@ export default function App() {
       const response = await fetch(RECOMMEND_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_input: enrichedInput }) });
       if (!response.ok) throw new Error(`서버 응답 오류: ${response.status} ${await response.text()}`);
       setResult(await response.json());
+      setSelectedPolicy(null);
+      setChatMessages([]);
+      setChatInput('');
     } catch (error) {
       setErrorMessage('백엔드 연결에 실패했습니다. VITE_API_URL과 서버 CORS 설정을 확인해주세요.');
       console.error(error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleOpenPolicyChat(policy) {
+    setSelectedPolicy(policy);
+    setChatInput('');
+    setChatMessages([
+      {
+        role: 'assistant',
+        content: `${displayValue(policy.policy_name, '선택한 정책')} 상담을 시작할게요. 신청 조건, 준비 서류, 다음 행동 중 궁금한 점을 물어보세요.`,
+      },
+    ]);
+  }
+
+  async function handleSendChat(event) {
+    event.preventDefault();
+    const message = chatInput.trim();
+    if (!message || !selectedPolicy) return;
+
+    const nextMessages = [...chatMessages, { role: 'user', content: message }];
+    setChatMessages(nextMessages);
+    setChatInput('');
+    setChatLoading(true);
+    setErrorMessage('');
+
+    try {
+      const response = await fetch(CHAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          policy: selectedPolicy,
+          user_context: data.user_condition,
+          messages: nextMessages,
+        }),
+      });
+      if (!response.ok) throw new Error(`챗봇 응답 오류: ${response.status} ${await response.text()}`);
+      const chatResult = await response.json();
+      setChatMessages([...nextMessages, { role: 'assistant', content: chatResult.answer }]);
+    } catch (error) {
+      setChatMessages([...nextMessages, { role: 'assistant', content: '답변을 생성하지 못했습니다. 백엔드 연결과 OPENAI_API_KEY 설정을 확인해주세요.' }]);
+      console.error(error);
+    } finally {
+      setChatLoading(false);
     }
   }
 
@@ -264,9 +396,18 @@ export default function App() {
         </aside>
 
         <section className="right-column">
-          {result ? <><div className="section-title"><div><p className="card-eyebrow">추천 결과</p><h2>현재 신청 가능한 추천 정책 Top {Math.min(data.recommendations.length, 5)}</h2></div><span className="count-badge">{data.recommendations.length}개 정책</span></div>{data.recommendations.length === 0 ? <div className="panel"><p className="muted">현재 신청 가능한 추천 정책이 없습니다. 입력을 조금 더 구체적으로 작성해보세요.</p></div> : <div className="policy-list">{data.recommendations.slice(0, 5).map((policy, index) => <PolicyCard policy={policy} index={index} key={`${policy.policy_name}-${index}`} />)}</div>}</> : <div className="panel empty-state"><UserRound size={28} /><h2>로그인 정보를 저장한 뒤 추천을 받아보세요</h2><p>나이, 성별, 지역, 관심 분야가 추천 문장에 함께 반영됩니다.</p></div>}
+          {result ? <><div className="section-title"><div><p className="card-eyebrow">추천 결과</p><h2>현재 신청 가능한 추천 정책 Top {Math.min(data.recommendations.length, 5)}</h2></div><span className="count-badge">{data.recommendations.length}개 정책</span></div>{data.recommendations.length === 0 ? <div className="panel"><p className="muted">현재 신청 가능한 추천 정책이 없습니다. 입력을 조금 더 구체적으로 작성해보세요.</p></div> : <div className="policy-list">{data.recommendations.slice(0, 5).map((policy, index) => <PolicyCard policy={policy} index={index} onOpenChat={handleOpenPolicyChat} key={`${policy.policy_name}-${index}`} />)}</div>}</> : <div className="panel empty-state"><UserRound size={28} /><h2>로그인 정보를 저장한 뒤 추천을 받아보세요</h2><p>나이, 성별, 지역, 관심 분야가 추천 문장에 함께 반영됩니다.</p></div>}
         </section>
       </section>
+      <ChatPanel
+        policy={selectedPolicy}
+        messages={chatMessages}
+        input={chatInput}
+        loading={chatLoading}
+        onInputChange={setChatInput}
+        onSend={handleSendChat}
+        onClose={() => setSelectedPolicy(null)}
+      />
     </main>
   );
 }

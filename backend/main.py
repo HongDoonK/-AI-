@@ -22,13 +22,17 @@ except ModuleNotFoundError:
         return False
 
 # 우리가 만든 모듈
-from backend.models import RecommendRequest, RecommendResponse, UserRequest, UserResponse
+from backend.models import ChatRequest, ChatResponse, RecommendRequest, RecommendResponse, UserRequest, UserResponse
 from backend.db import get_centers_by_region, get_user, save_user
 
 # AI 모듈(ai/recommender.py)이 아직 비어있으므로 임시 mock 함수 사용
 # 6단계에서 아래 한 줄만 수정하면 실제 AI 모듈로 교체됨
 #     from ai.recommender import recommend_policy
 from ai.recommender import recommend_policy
+from ai.policy_chat_agent import PolicyChatAgent
+
+
+policy_chat_agent = PolicyChatAgent()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -133,6 +137,32 @@ def recommend(request: RecommendRequest):
             status_code=500,
             detail=f"추천 처리 중 오류 발생: {str(e)}",
         )
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest):
+    try:
+        messages = [
+            {"role": message.role, "content": message.content}
+            for message in request.messages
+        ]
+        answer = policy_chat_agent.answer(
+            policy=request.policy,
+            user_context=request.user_context,
+            messages=messages,
+        )
+        return {"answer": answer}
+    except Exception as e:
+        print(f"❌ /chat 처리 중 에러: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"챗봇 응답 생성 중 오류 발생: {str(e)}",
+        )
+
+
+@app.get("/chat/status")
+def chat_status():
+    return policy_chat_agent.status()
 
 
 @app.post("/user", response_model=UserResponse)
