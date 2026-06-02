@@ -79,3 +79,28 @@ def create_structured_output(
         return json.loads(output_text)
     except json.JSONDecodeError as exc:
         raise LLMUnavailable(f"OpenAI response was not valid JSON: {exc}") from exc
+
+
+def create_chat_response(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    max_output_tokens: int = 900,
+) -> str:
+    if not llm_enabled():
+        raise LLMUnavailable("LLM is disabled or OPENAI_API_KEY is missing.")
+
+    client = _client()
+    try:
+        response = client.responses.create(
+            model=get_model_name(),
+            input=[{"role": "system", "content": system_prompt}, *messages],
+            max_output_tokens=max_output_tokens,
+        )
+    except Exception as exc:
+        raise LLMUnavailable(f"OpenAI chat response failed: {exc}") from exc
+
+    output_text = getattr(response, "output_text", "").strip()
+    if not output_text:
+        raise LLMUnavailable("OpenAI response did not include output_text.")
+    return output_text
