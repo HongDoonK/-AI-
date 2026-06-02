@@ -107,6 +107,54 @@ def _build_policies_ddl(table_name: str, columns: dict) -> str:
     """
 
 
+def _ensure_search_documents_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS search_documents (
+            doc_id           TEXT PRIMARY KEY,
+            source_table     TEXT NOT NULL,
+            source_id        TEXT NOT NULL,
+            domain           TEXT NOT NULL,
+            title            TEXT,
+            summary          TEXT,
+            region_name      TEXT,
+            region_sido      TEXT,
+            region_sigungu   TEXT,
+            target           TEXT,
+            min_age          INTEGER,
+            max_age          INTEGER,
+            employment_status TEXT,
+            status           TEXT,
+            apply_start_date TEXT,
+            apply_end_date   TEXT,
+            url              TEXT,
+            search_text      TEXT,
+            raw_ref          TEXT,
+            collected_at     TEXT
+        )
+    """)
+    cursor.execute("PRAGMA table_info(search_documents)")
+    columns = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()}
+    if "region_sido" not in columns:
+        cursor.execute("ALTER TABLE search_documents ADD COLUMN region_sido TEXT")
+    if "region_sigungu" not in columns:
+        cursor.execute("ALTER TABLE search_documents ADD COLUMN region_sigungu TEXT")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_documents_domain ON search_documents(domain)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_documents_region ON search_documents(region_name)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_documents_region_sido ON search_documents(region_sido)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_documents_region_sigungu ON search_documents(region_sigungu)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)"
+    )
+
+
 def create_tables():
     """policies, policies_processed, centers 테이블 생성"""
     conn = get_connection()
@@ -136,10 +184,11 @@ def create_tables():
     """)
 
     _ensure_users_table(cursor)
+    _ensure_search_documents_table(cursor)
 
     conn.commit()
     conn.close()
-    print("✅ DB 테이블 생성 완료 (policies, policies_processed, centers, users)")
+    print("✅ DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents)")
 
 
 def get_centers_by_region(region: str) -> list:

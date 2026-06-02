@@ -58,6 +58,18 @@ class PolicyResult(BaseModel):
         default_factory=list,
         description="신청을 위한 행동 체크리스트",
     )
+    match_score:       float | None = Field(None, description="검색 랭킹 점수")
+    match_method:      str          = Field(default="", description="검색 방식")
+    match_score_label: str          = Field(default="", description="화면 표시용 검색 점수")
+    domain:            str          = Field(default="", description="검색 도메인 코드")
+    domain_label:      str          = Field(default="", description="검색 도메인 표시명")
+    source_table:      str          = Field(default="", description="원본 테이블")
+    source_label:      str          = Field(default="", description="원본 출처 표시명")
+    region_name:       str          = Field(default="", description="정책 지역명")
+    region_sido:       str          = Field(default="", description="정책 시도")
+    region_sigungu:    str          = Field(default="", description="정책 시군구")
+    region_match:      str          = Field(default="", description="지역 매칭 설명")
+    match_badges:      list[str]    = Field(default_factory=list, description="추천 근거 배지")
 
 
 class CenterResult(BaseModel):

@@ -139,8 +139,8 @@ function LoginPanel({ profile, onLogin, saving }) {
         <label>성별<select value={form.gender} onChange={(e) => updateField('gender', e.target.value)}><option value="">선택 안 함</option><option value="여성">여성</option><option value="남성">남성</option></select></label>
         <label>시도<select value={form.region_sido} onChange={(e) => updateField('region_sido', e.target.value)}><option value="">선택 안 함</option>{Object.keys(REGION_OPTIONS).map((sido) => <option key={sido} value={sido}>{sido}</option>)}</select></label>
         <label>시군구<select value={form.region_sigungu} onChange={(e) => updateField('region_sigungu', e.target.value)} disabled={!form.region_sido}><option value="">선택 안 함</option>{sigunguOptions.map((sigungu) => <option key={sigungu} value={sigungu}>{sigungu}</option>)}</select></label>
-        <label>상태<input value={form.status} onChange={(e) => updateField('status', e.target.value)} placeholder="청년, 대학생" /></label>
-        <label>취업 상태<select value={form.employment_status} onChange={(e) => updateField('employment_status', e.target.value)}><option value="">선택 안 함</option><option value="미취업">미취업</option><option value="재직">재직</option><option value="대학생">대학생</option><option value="창업">창업자</option></select></label>
+        <label>상태<input value={form.status} onChange={(e) => updateField('status', e.target.value)} placeholder="청년, 대학생, 졸업생" /></label>
+        <label>재직 여부<select value={form.employment_status} onChange={(e) => updateField('employment_status', e.target.value)}><option value="">선택 안 함</option><option value="미취업">미취업</option><option value="재직">재직</option><option value="창업">창업자</option><option value="자영업">자영업</option><option value="프리랜서">프리랜서</option></select></label>
         <label>관심 분야<select value={form.interest} onChange={(e) => updateField('interest', e.target.value)}><option value="">선택 안 함</option><option value="주거">주거</option><option value="취업">취업</option><option value="창업">창업</option><option value="교육">교육</option><option value="복지">복지</option><option value="금융">금융</option></select></label>
         <label>주거 상황<input value={form.housing_status} onChange={(e) => updateField('housing_status', e.target.value)} placeholder="월세" /></label>
       </div>
@@ -156,6 +156,8 @@ function LoginPanel({ profile, onLogin, saving }) {
 function PolicyCard({ policy, index }) {
   const checklist = Array.isArray(policy.checklist) ? policy.checklist : [];
   const url = policy.application_url || policy.url || policy.ref_url;
+  const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
+  const hasEvidence = badges.length > 0 || policy.region_match || policy.domain_label || policy.source_label || policy.match_score_label;
   return (
     <article className="policy-card">
       <div className="policy-head">
@@ -163,6 +165,7 @@ function PolicyCard({ policy, index }) {
         <span className={getPossibilityClass(policy.apply_possibility)}>{displayValue(policy.apply_possibility)}</span>
       </div>
       <div className="policy-meta"><span>신청 기간: {displayValue(policy.application_period)}</span></div>
+      {hasEvidence && <section className="evidence-box"><div className="evidence-head"><strong>추천 근거</strong>{policy.match_score_label && <span>{displayValue(policy.match_method, '검색 점수')} {policy.match_score_label}</span>}</div><div className="evidence-grid">{badges.map((badge, idx) => <span key={`${badge}-${idx}`}>{badge}</span>)}</div></section>}
       <section className="mini-section"><h4>추천 이유</h4><p>{displayValue(policy.reason, '입력 조건과 정책 데이터의 관련성을 기준으로 추천했습니다.')}</p></section>
       {policy.support_content && <section className="mini-section"><h4>지원 내용</h4><p>{policy.support_content}</p></section>}
       {checklist.length > 0 && <section className="mini-section checklist-block"><h4>신청 체크리스트</h4><ul className="check-list">{checklist.map((item, idx) => <li key={`${item}-${idx}`}><CheckCircle2 size={16} /><span>{item}</span></li>)}</ul></section>}
@@ -257,7 +260,7 @@ export default function App() {
       <section className="result-grid">
         <aside className="left-column">
           <LoginPanel profile={profile} onLogin={handleLogin} saving={savingProfile} />
-          {result && <><div className="panel"><p className="card-eyebrow">AI 분석 결과</p><h2>사용자 조건</h2><div className="pill-wrap"><ValuePill label="나이" value={data.user_condition.age ? `${data.user_condition.age}세` : null} /><ValuePill label="성별" value={data.user_condition.gender || profile?.gender} /><ValuePill label="지역" value={data.user_condition.region || profile?.region_sido} /><ValuePill label="상태" value={data.user_condition.status || data.user_condition.employment_status} /><ValuePill label="관심 분야" value={data.user_condition.interest} /><ValuePill label="주거 상황" value={data.user_condition.housing_status} /></div></div><div className="panel blue-panel"><p className="card-eyebrow">상담 연결</p><h2>가까운 청년센터</h2>{data.centers.length === 0 ? <p className="muted">지역 조건에 맞는 센터 정보가 아직 없습니다.</p> : <div className="center-list">{data.centers.slice(0, 5).map((center, index) => <CenterCard center={center} key={`${center.center_name || center.cntrNm}-${index}`} />)}</div>}</div></>}
+          {result && <><div className="panel"><p className="card-eyebrow">AI 분석 결과</p><h2>사용자 조건</h2><div className="pill-wrap"><ValuePill label="나이" value={data.user_condition.age ? `${data.user_condition.age}세` : null} /><ValuePill label="성별" value={data.user_condition.gender || profile?.gender} /><ValuePill label="지역" value={data.user_condition.region || profile?.region_sido} /><ValuePill label="상태" value={data.user_condition.status} /><ValuePill label="재직 여부" value={data.user_condition.employment_status} /><ValuePill label="관심 분야" value={data.user_condition.interest} /><ValuePill label="주거 상황" value={data.user_condition.housing_status} /></div></div><div className="panel blue-panel"><p className="card-eyebrow">상담 연결</p><h2>가까운 청년센터</h2>{data.centers.length === 0 ? <p className="muted">지역 조건에 맞는 센터 정보가 아직 없습니다.</p> : <div className="center-list">{data.centers.slice(0, 5).map((center, index) => <CenterCard center={center} key={`${center.center_name || center.cntrNm}-${index}`} />)}</div>}</div></>}
         </aside>
 
         <section className="right-column">

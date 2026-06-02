@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from backend.region_map import REGION_CODE_MAP
 from ai.llm_client import LLMUnavailable, create_structured_output
 
 
@@ -16,7 +17,9 @@ REGIONS = [
 EMPLOYMENT_KEYWORDS = {
     "미취업": ["미취업", "취준", "취업준비", "구직", "실업", "무직"],
     "재직": ["재직", "직장인", "근로자", "회사원", "일하고"],
-    "창업": ["창업자", "예비창업자", "사업자", "자영업"],
+    "창업": ["창업자", "예비창업자"],
+    "자영업": ["사업자", "자영업"],
+    "프리랜서": ["프리랜서"],
 }
 
 STATUS_KEYWORDS = {
@@ -24,7 +27,6 @@ STATUS_KEYWORDS = {
     "졸업생": ["졸업생", "졸업자"],
     "청년": ["청년"],
     "군인": ["군인"],
-    "프리랜서": ["프리랜서"],
 }
 
 INTEREST_KEYWORDS = {
@@ -43,6 +45,28 @@ GENDER_KEYWORDS = {
     "남성": ["남성", "남자"],
 }
 
+REGION_ALIASES = {
+    "서울특별시": "서울",
+    "부산광역시": "부산",
+    "대구광역시": "대구",
+    "인천광역시": "인천",
+    "광주광역시": "광주",
+    "대전광역시": "대전",
+    "울산광역시": "울산",
+    "세종특별자치시": "세종",
+    "경기도": "경기",
+    "강원특별자치도": "강원",
+    "강원도": "강원",
+    "충청북도": "충북",
+    "충청남도": "충남",
+    "전북특별자치도": "전북",
+    "전라북도": "전북",
+    "전라남도": "전남",
+    "경상북도": "경북",
+    "경상남도": "경남",
+    "제주특별자치도": "제주",
+}
+
 
 def _first_keyword(text: str, mapping: dict[str, list[str]]) -> str | None:
     for label, keywords in mapping.items():
@@ -51,12 +75,42 @@ def _first_keyword(text: str, mapping: dict[str, list[str]]) -> str | None:
     return None
 
 
+def _normalize_region_text(text: str) -> str:
+    normalized = text or ""
+    for long_name, short_name in REGION_ALIASES.items():
+        normalized = normalized.replace(long_name, short_name)
+    return normalized
+
+
+def _extract_region_parts(text: str) -> tuple[str | None, str | None, str | None]:
+    normalized = _normalize_region_text(text)
+    sido = next((region for region in REGION_CODE_MAP if region in normalized), None)
+    sigungu = None
+
+    if sido:
+        sigungu = next((name for name in REGION_CODE_MAP[sido] if name in normalized), None)
+    else:
+        for candidate_sido, sigungu_map in REGION_CODE_MAP.items():
+            match = next((name for name in sigungu_map if name in normalized), None)
+            if match:
+                sido = candidate_sido
+                sigungu = match
+                break
+
+    if not sido:
+        return None, None, None
+    region = f"{sido} {sigungu}".strip() if sigungu else sido
+    return region, sido, sigungu
+
+
 USER_CONDITION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
         "age": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
         "region": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "region_sido": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "region_sigungu": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "interest": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "employment_status": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -67,6 +121,8 @@ USER_CONDITION_SCHEMA = {
     "required": [
         "age",
         "region",
+        "region_sido",
+        "region_sigungu",
         "status",
         "interest",
         "employment_status",
@@ -77,10 +133,23 @@ USER_CONDITION_SCHEMA = {
 }
 
 
-def _normalize_llm_condition(condition: dict) -> dict:
+def _normalize_llm_condition(condition: dict, source_text: str = "") -> dict:
+    region, region_sido, region_sigungu = _extract_region_parts(
+        " ".join(
+            str(condition.get(key) or "")
+            for key in ["region", "region_sido", "region_sigungu"]
+        )
+    )
+    if not region_sigungu and source_text:
+        source_region, source_sido, source_sigungu = _extract_region_parts(source_text)
+        region = region or source_region
+        region_sido = region_sido or source_sido
+        region_sigungu = region_sigungu or source_sigungu
     normalized = {
         "age": condition.get("age"),
-        "region": condition.get("region"),
+        "region": region or condition.get("region"),
+        "region_sido": region_sido or condition.get("region_sido"),
+        "region_sigungu": region_sigungu or condition.get("region_sigungu"),
         "status": condition.get("status"),
         "interest": condition.get("interest"),
         "employment_status": condition.get("employment_status"),
@@ -90,6 +159,9 @@ def _normalize_llm_condition(condition: dict) -> dict:
     }
     if not isinstance(normalized["age"], int) or not 14 <= normalized["age"] <= 49:
         normalized["age"] = None
+    if normalized["employment_status"] in {"대학생", "졸업생", "청년", "군인"}:
+        normalized["status"] = normalized["status"] or normalized["employment_status"]
+        normalized["employment_status"] = None
     return normalized
 
 
@@ -98,7 +170,10 @@ def extract_user_condition_with_llm(user_input: str) -> dict:
         "You extract Korean youth policy recommendation conditions. "
         "Return only fields in the schema. Use null when the user did not provide a value. "
         "If the input contains both a question and saved profile, the direct question has priority. "
-        "Use broad Korean labels such as 서울, 경기, 대학생, 취업, 주거, 창업, 교육, 복지, 금융, 월세."
+        "Extract region_sido and region_sigungu separately when available, for example 경기 오산시. "
+        "Keep school/life status and employment status separate: status can be 대학생, 졸업생, 청년, 군인, "
+        "while employment_status should only be 미취업, 재직, 창업, 자영업, 프리랜서, or null. "
+        "Use broad Korean labels such as 서울, 경기, 오산시, 대학생, 미취업, 재직, 취업, 주거, 창업, 교육, 복지, 금융, 월세."
     )
     user_prompt = f"사용자 입력:\n{user_input}"
     result = create_structured_output(
@@ -108,7 +183,21 @@ def extract_user_condition_with_llm(user_input: str) -> dict:
         schema=USER_CONDITION_SCHEMA,
         max_output_tokens=500,
     )
-    return _normalize_llm_condition(result)
+    normalized = _normalize_llm_condition(result, user_input)
+    rule_based = extract_user_condition_rule_based(user_input)
+
+    # Deterministic text signals are safer than LLM nulls or broad guesses for
+    # routing. In particular, region_sigungu and interest control hard filters.
+    for key in ["region", "region_sido", "region_sigungu", "interest", "housing_status"]:
+        if rule_based.get(key):
+            normalized[key] = rule_based[key]
+    for key in ["age", "status", "employment_status", "income", "gender"]:
+        if normalized.get(key) in (None, "") and rule_based.get(key):
+            normalized[key] = rule_based[key]
+
+    if normalized.get("region_sido") and normalized.get("region_sigungu"):
+        normalized["region"] = f"{normalized['region_sido']} {normalized['region_sigungu']}"
+    return normalized
 
 
 def extract_user_condition_rule_based(user_input: str) -> dict:
@@ -135,7 +224,7 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
             if 14 <= parsed_age <= 49:
                 age = parsed_age
 
-    region = next((region for region in REGIONS if region in text), None)
+    region, region_sido, region_sigungu = _extract_region_parts(text)
     status = _first_keyword(text, STATUS_KEYWORDS)
     employment_status = _first_keyword(text, EMPLOYMENT_KEYWORDS)
     interest = _first_keyword(text, INTEREST_KEYWORDS)
@@ -145,7 +234,7 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
     # The user's direct prompt has priority. Stored login profile is only used
     # when the prompt does not provide that condition.
     if region is None:
-        region = next((region for region in REGIONS if region in fallback_text), None)
+        region, region_sido, region_sigungu = _extract_region_parts(fallback_text)
     if status is None:
         status = _first_keyword(fallback_text, STATUS_KEYWORDS)
     if employment_status is None:
@@ -169,6 +258,8 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
     return {
         "age": age,
         "region": region,
+        "region_sido": region_sido,
+        "region_sigungu": region_sigungu,
         "status": status,
         "interest": interest,
         "employment_status": employment_status,

@@ -134,6 +134,41 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
 .badge.gray { background: #64748b; }
 .policy-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .policy-meta span { background: #f1f5f9; border-radius: 8px; padding: 7px 11px; color: #334155; font-size: 14px; }
+.evidence-box {
+  margin: 14px 0 4px;
+  border: 1px solid #dbeafe;
+  background: #f8fbff;
+  border-radius: 8px;
+  padding: 13px;
+}
+.evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #1e3a8a;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.evidence-head span {
+  color: #475569;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.evidence-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.evidence-grid span {
+  background: white;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 13px;
+  font-weight: 800;
+}
 .mini-section { margin-top: 16px; }
 .mini-section h4 { margin: 0 0 8px; }
 .mini-section p { margin: 0; line-height: 1.65; color: #374151; }

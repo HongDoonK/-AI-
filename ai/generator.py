@@ -9,6 +9,29 @@ from ai.llm_client import LLMUnavailable, create_structured_output
 
 VALID_POSSIBILITIES = {"높음", "확인 필요", "낮음"}
 
+DOMAIN_LABELS = {
+    "policy": "일반 정책",
+    "policy_housing": "주거 정책",
+    "policy_finance": "금융/복지 정책",
+    "policy_training": "교육/훈련 정책",
+    "policy_job": "취업 정책",
+    "policy_startup": "창업 정책",
+    "housing_notice": "임대 공고",
+    "rental_house": "임대주택 단지",
+    "loan": "청년 금융상품",
+    "training": "직업훈련",
+    "startup": "창업 공고",
+}
+
+SOURCE_LABELS = {
+    "policies_processed": "온통청년 정책",
+    "hrd_trainings": "HRD-Net 훈련",
+    "kstartup_notices": "K-Startup 공고",
+    "smallloan_youth": "청년 금융상품",
+    "myhome_notices": "마이홈 임대공고",
+    "rental_houses": "청년 임대주택",
+}
+
 RECOMMENDATIONS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -92,11 +115,83 @@ def _policy_focus(row: dict) -> str:
     return category or keyword or "세부 분야 확인 필요"
 
 
+def _score_label(row: dict) -> str:
+    score = pd.to_numeric(row.get("score"), errors="coerce")
+    if pd.isna(score):
+        return ""
+    method = _clean(row.get("match_method"))
+    if "FAISS" in method:
+        return f"{float(score):.3f}"
+    return f"{float(score):.1f}"
+
+
+def _region_match_label(condition: dict, row: dict) -> str:
+    wanted_sigungu = _clean(condition.get("region_sigungu"))
+    wanted_sido = _clean(condition.get("region_sido")) or _clean(condition.get("region"))
+    row_region = _clean(row.get("region_name"))
+    row_sido = _clean(row.get("region_sido"))
+    row_sigungu = _clean(row.get("region_sigungu"))
+
+    if row_sido == "전국" or row_region == "전국":
+        return "전국 단위"
+    if wanted_sigungu and wanted_sigungu in row_sigungu:
+        return f"{wanted_sigungu} 일치"
+    if wanted_sido and wanted_sido in row_sido:
+        return f"{wanted_sido} 지역"
+    if row_region:
+        return row_region
+    return "지역 확인 필요"
+
+
+def _metadata(row: dict, condition: dict) -> dict:
+    domain = _clean(row.get("domain")) or _clean(row.get("category_main"))
+    source_table = _clean(row.get("source_table")) or _clean(row.get("category_sub"))
+    region_label = _region_match_label(condition, row)
+    score_label = _score_label(row)
+    method = _clean(row.get("match_method")) or "검색 점수"
+    domain_label = DOMAIN_LABELS.get(domain, domain or "분야 확인")
+    source_label = SOURCE_LABELS.get(source_table, source_table or "출처 확인")
+    badges = [region_label, domain_label, source_label]
+    if score_label:
+        badges.append(f"{method} {score_label}")
+    return {
+        "match_score": None if not score_label else float(pd.to_numeric(row.get("score"), errors="coerce")),
+        "match_method": method,
+        "match_score_label": score_label,
+        "domain": domain,
+        "domain_label": domain_label,
+        "source_table": source_table,
+        "source_label": source_label,
+        "region_name": _clean(row.get("region_name")),
+        "region_sido": _clean(row.get("region_sido")),
+        "region_sigungu": _clean(row.get("region_sigungu")),
+        "region_match": region_label,
+        "match_badges": badges,
+    }
+
+
+def _attach_metadata(recommendations: list[dict], top_policies: list[dict], condition: dict) -> list[dict]:
+    by_name = {_clean(row.get("policy_name")): row for row in top_policies}
+    enriched = []
+    for index, item in enumerate(recommendations):
+        row = by_name.get(_clean(item.get("policy_name")))
+        if row is None and index < len(top_policies):
+            row = top_policies[index]
+        enriched_item = dict(item)
+        if row is not None:
+            enriched_item.update(_metadata(row, condition))
+        enriched.append(enriched_item)
+    return enriched
+
+
 def _specific_reason_parts(condition: dict, row: dict) -> list[str]:
     parts = []
     search_text = _row_text(
         row,
-        ["search_text", "policy_name", "description", "keyword", "support_content", "school_cd", "job_cd"],
+        [
+            "search_text", "policy_name", "description", "keyword", "support_content",
+            "region_name", "region_sido", "region_sigungu", "school_cd", "job_cd",
+        ],
     )
     school_text = _row_text(row, ["school_cd", "search_text"])
     job_text = _row_text(row, ["job_cd", "search_text"])
@@ -123,7 +218,9 @@ def _specific_reason_parts(condition: dict, row: dict) -> list[str]:
     if housing and housing in search_text:
         parts.append(f"{housing} 상황과 직접 관련된 지원 내용이 포함됩니다")
 
-    region = condition.get("region")
+    region = condition.get("region") or " ".join(
+        value for value in [condition.get("region_sido"), condition.get("region_sigungu")] if value
+    )
     if region and region in search_text:
         parts.append(f"{region} 지역 정보가 정책 설명에 포함됩니다")
 
@@ -209,6 +306,13 @@ def _compact_policy(row: dict) -> dict:
         "category_main": _clean(row.get("category_main")),
         "category_sub": _clean(row.get("category_sub")),
         "keyword": _clean(row.get("keyword")),
+        "domain": _clean(row.get("domain")),
+        "source_table": _clean(row.get("source_table")),
+        "region_name": _clean(row.get("region_name")),
+        "region_sido": _clean(row.get("region_sido")),
+        "region_sigungu": _clean(row.get("region_sigungu")),
+        "score": _clean(row.get("score")),
+        "match_method": _clean(row.get("match_method")),
         "description": _short(row.get("description"), 180),
         "support_content": _short(row.get("support_content"), 220),
         "apply_period": _clean(row.get("apply_period")),
@@ -258,7 +362,7 @@ def generate_recommendations_with_llm(
     recommendations = result.get("recommendations", [])
     if not isinstance(recommendations, list):
         raise LLMUnavailable("LLM recommendations payload is not a list.")
-    return recommendations[:5]
+    return _attach_metadata(recommendations[:5], top_policies, user_condition)
 
 
 def generate_recommendations_rule_based(user_input: str, user_condition: dict, top_policies: list[dict]) -> list[dict]:
@@ -269,17 +373,17 @@ def generate_recommendations_rule_based(user_input: str, user_condition: dict, t
         if possibility not in VALID_POSSIBILITIES:
             possibility = "확인 필요"
 
-        recommendations.append(
-            {
-                "policy_name": _clean(row.get("policy_name")) or "정책명 미상",
-                "apply_possibility": possibility,
-                "reason": _reason(user_condition, row, parts),
-                "support_content": _clean(row.get("support_content")),
-                "application_period": _clean(row.get("apply_period")),
-                "application_url": _clean(row.get("application_url")) or _clean(row.get("ref_url1")),
-                "checklist": _checklist(row)[:5],
-            }
-        )
+        item = {
+            "policy_name": _clean(row.get("policy_name")) or "정책명 미상",
+            "apply_possibility": possibility,
+            "reason": _reason(user_condition, row, parts),
+            "support_content": _clean(row.get("support_content")),
+            "application_period": _clean(row.get("apply_period")),
+            "application_url": _clean(row.get("application_url")) or _clean(row.get("ref_url1")),
+            "checklist": _checklist(row)[:5],
+        }
+        item.update(_metadata(row, user_condition))
+        recommendations.append(item)
     return recommendations
 
 
