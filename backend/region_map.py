@@ -322,6 +322,8 @@ def get_sigungu_list(sido: str) -> list:
 # 역방향 매핑: 법정동 코드 → 시도명
 # 예: "11110" → "서울", "26110" → "부산"
 CODE_TO_SIDO = {}
+CODE_TO_SIGUNGU = {}
 for sido, sigungu_dict in REGION_CODE_MAP.items():
-    for code in sigungu_dict.values():
+    for sigungu, code in sigungu_dict.items():
         CODE_TO_SIDO[code] = sido
+        CODE_TO_SIGUNGU[code] = sigungu

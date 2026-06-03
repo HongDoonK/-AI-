@@ -116,6 +116,7 @@ def recommend(request: RecommendRequest):
 
         user_condition  = result.get("user_condition", {})
         recommendations = result.get("recommendations", [])
+        message         = result.get("message", "")
 
         # ── 2) 사용자 지역 정보로 청년센터 조회 ──────────
         region  = user_condition.get("region", "")
@@ -128,6 +129,7 @@ def recommend(request: RecommendRequest):
             "user_condition":  user_condition,
             "recommendations": recommendations,
             "centers":         centers,
+            "message":         message,
         }
 
     except Exception as e:
@@ -146,12 +148,12 @@ def chat(request: ChatRequest):
             {"role": message.role, "content": message.content}
             for message in request.messages
         ]
-        answer = policy_chat_agent.answer(
+        chat_result = policy_chat_agent.answer(
             policy=request.policy,
             user_context=request.user_context,
             messages=messages,
         )
-        return {"answer": answer}
+        return chat_result
     except Exception as e:
         print(f"❌ /chat 처리 중 에러: {e}")
         raise HTTPException(

@@ -10,7 +10,7 @@
 # ──────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional
+from typing import Any, Optional
 
 
 # ════════════════════════════════════════════════════════════════
@@ -51,7 +51,8 @@ class PolicyResult(BaseModel):
         description="신청 가능성 ('높음' / '확인 필요' / '낮음')",
     )
     reason:             str       = Field(default="", description="이 정책을 추천한 이유")
-    support_content:    str       = Field(default="", description="지원 내용")
+    support_content:    str       = Field(default="", description="지원 내용 요약")
+    support_summary:    str       = Field(default="", description="지원 내용 추상 요약")
     application_period: str       = Field(default="", description="신청 기간")
     application_url:    str       = Field(default="", description="신청 URL")
     checklist:          list[str] = Field(
@@ -64,12 +65,31 @@ class PolicyResult(BaseModel):
     domain:            str          = Field(default="", description="검색 도메인 코드")
     domain_label:      str          = Field(default="", description="검색 도메인 표시명")
     source_table:      str          = Field(default="", description="원본 테이블")
+    source_id:         str          = Field(default="", description="원본 행 ID")
+    doc_id:            str          = Field(default="", description="통합 검색 문서 ID")
     source_label:      str          = Field(default="", description="원본 출처 표시명")
     region_name:       str          = Field(default="", description="정책 지역명")
     region_sido:       str          = Field(default="", description="정책 시도")
     region_sigungu:    str          = Field(default="", description="정책 시군구")
     region_match:      str          = Field(default="", description="지역 매칭 설명")
     match_badges:      list[str]    = Field(default_factory=list, description="추천 근거 배지")
+
+
+class ChatMessage(BaseModel):
+    role:    str = Field(default="user", description="메시지 역할: user 또는 assistant")
+    content: str = Field(default="", max_length=3000, description="메시지 내용")
+
+
+class ChatRequest(BaseModel):
+    policy:       dict[str, Any]    = Field(default_factory=dict, description="선택된 추천 정책 카드")
+    user_context: dict[str, Any]    = Field(default_factory=dict, description="사용자 조건")
+    messages:     list[ChatMessage] = Field(default_factory=list, description="정책별 대화 내역")
+
+
+class ChatResponse(BaseModel):
+    answer:              str             = Field(default="", description="챗봇 답변")
+    suggested_questions: list[str]       = Field(default_factory=list, description="후속 질문 예시")
+    policy_context:      dict[str, Any]  = Field(default_factory=dict, description="답변에 사용한 정책 식별 정보")
 
 
 class CenterResult(BaseModel):
@@ -112,6 +132,10 @@ class RecommendResponse(BaseModel):
         default_factory=list,
         description="사용자 지역 기반 청년센터 목록",
     )
+    message:         str                 = Field(
+        default="",
+        description="추천 결과 대신 사용자에게 보여줄 안내 메시지",
+    )
 
 
 class UserRequest(BaseModel):
@@ -119,11 +143,7 @@ class UserRequest(BaseModel):
     gender:            str | None = None
     region_sido:       str | None = None
     region_sigungu:    str | None = None
-    status:            str | None = None
-    interest:          str | None = None
     employment_status: str | None = None
-    income:            str | None = None
-    housing_status:    str | None = None
 
 
 class UserResponse(BaseModel):
@@ -132,9 +152,5 @@ class UserResponse(BaseModel):
     gender:            str | None = None
     region_sido:       str | None = None
     region_sigungu:    str | None = None
-    status:            str | None = None
-    interest:          str | None = None
     employment_status: str | None = None
-    income:            str | None = None
-    housing_status:    str | None = None
     created_at:        str | None = None
