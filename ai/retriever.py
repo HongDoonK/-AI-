@@ -387,8 +387,15 @@ def _faiss_rank(
     if corpus.empty or candidates.empty:
         raise RuntimeError("No candidates available for FAISS search.")
 
+    allowed = set(candidates["_source_index"].astype(int).tolist()) if "_source_index" in candidates.columns else set()
+    search_corpus = corpus
+    if allowed and "_source_index" in corpus.columns:
+        search_corpus = corpus[corpus["_source_index"].astype(int).isin(allowed)].copy()
+    if search_corpus.empty:
+        search_corpus = candidates.copy()
+
     faiss, model = _load_faiss_resources()
-    doc_embeddings = _load_or_create_embeddings(model, corpus)
+    doc_embeddings = _load_or_create_embeddings(model, search_corpus)
     faiss.normalize_L2(doc_embeddings)
 
     index = faiss.IndexFlatIP(doc_embeddings.shape[1])
@@ -405,14 +412,12 @@ def _faiss_rank(
     search_k = index.ntotal
     scores, indices = index.search(query_embedding, search_k)
 
-    allowed = set(candidates["_source_index"].astype(int).tolist())
     rows = []
-    for score, corpus_index in zip(scores[0], indices[0]):
-        if int(corpus_index) < 0:
+    for score, search_index in zip(scores[0], indices[0]):
+        if int(search_index) < 0:
             continue
-        row = corpus.iloc[[int(corpus_index)]].copy()
-        source_index = int(row["_source_index"].iloc[0])
-        if source_index not in allowed:
+        row = search_corpus.iloc[[int(search_index)]].copy()
+        if allowed and "_source_index" in row.columns and int(row["_source_index"].iloc[0]) not in allowed:
             continue
         row["score"] = float(score)
         rows.append(row)

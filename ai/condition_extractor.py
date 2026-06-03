@@ -103,6 +103,16 @@ def _extract_region_parts(text: str) -> tuple[str | None, str | None, str | None
     return region, sido, sigungu
 
 
+def _has_housing_keyword(text: str, keyword: str) -> bool:
+    if keyword == "자가":
+        return bool(re.search(r"(?<![가-힣])자가(?![가-힣])|자가\s*주택|자가\s*거주", text))
+    return keyword in text
+
+
+def _first_housing_keyword(text: str) -> str | None:
+    return next((keyword for keyword in HOUSING_KEYWORDS if _has_housing_keyword(text, keyword)), None)
+
+
 USER_CONDITION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -229,7 +239,7 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
     employment_status = _first_keyword(text, EMPLOYMENT_KEYWORDS)
     interest = _first_keyword(text, INTEREST_KEYWORDS)
     gender = _first_keyword(text, GENDER_KEYWORDS)
-    housing_status = next((keyword for keyword in HOUSING_KEYWORDS if keyword in text), None)
+    housing_status = _first_housing_keyword(text)
 
     # The user's direct prompt has priority. Stored login profile is only used
     # when the prompt does not provide that condition.
@@ -246,7 +256,7 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
     # If the prompt explicitly names an interest, do not let a saved profile's
     # housing status pull the recommendation back toward housing.
     if housing_status is None and interest is None:
-        housing_status = next((keyword for keyword in HOUSING_KEYWORDS if keyword in fallback_text), None)
+        housing_status = _first_housing_keyword(fallback_text)
 
     income = None
     for pattern in INCOME_PATTERNS:
@@ -267,6 +277,28 @@ def extract_user_condition_rule_based(user_input: str) -> dict:
         "housing_status": housing_status,
         "gender": gender,
     }
+
+
+def has_condition_signal(user_input: str) -> bool:
+    """Return True only when the raw input contains a recommendation condition."""
+    text = user_input or ""
+    if re.search(r"(?:만\s*)?(\d{1,2})\s*(?:살|세)", text):
+        return True
+    if _extract_region_parts(text)[0]:
+        return True
+    if _first_keyword(text, GENDER_KEYWORDS):
+        return True
+    if _first_keyword(text, EMPLOYMENT_KEYWORDS):
+        return True
+    if _first_keyword(text, INTEREST_KEYWORDS):
+        return True
+    if _first_housing_keyword(text):
+        return True
+    if any(re.search(pattern, text) for pattern in INCOME_PATTERNS):
+        return True
+
+    status = _first_keyword(text, STATUS_KEYWORDS)
+    return bool(status and status != "청년")
 
 
 def extract_user_condition(user_input: str) -> dict:
