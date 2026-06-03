@@ -284,15 +284,20 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
 .rank-mood {
   width: 42px;
   height: 42px;
+  min-width: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 27px;
+  font-size: 22px;
   line-height: 1;
   background: #fff7ed;
   border: 1px solid #fed7aa;
   box-shadow: 0 8px 18px rgba(245, 158, 11, .15);
+  overflow: hidden;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
+  font-style: normal;
+  user-select: none;
 }
 .rank-mood-1 { background: #fff7ed; border-color: #fdba74; }
 .rank-mood-2 { background: #fef9c3; border-color: #fde047; }

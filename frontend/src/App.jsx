@@ -63,16 +63,18 @@ function getPossibilityClass(value = '') {
   return 'badge blue';
 }
 
-const RANK_MOODS = [
-  { emoji: '😄', label: '매우 좋은 추천' },
-  { emoji: '🙂', label: '좋은 추천' },
-  { emoji: '😐', label: '보통 추천' },
-  { emoji: '🙁', label: '확인 필요 추천' },
-  { emoji: '😟', label: '낮은 추천' },
-];
+const POSSIBILITY_MOODS = {
+  높음: { emoji: '😄️', label: '신청 가능성 높음' },
+  낮음: { emoji: '😟️', label: '신청 가능성 낮음' },
+  확인: { emoji: '😐️', label: '신청 가능성 확인 필요' },
+  default: { emoji: '🙂️', label: '신청 가능성 보통' },
+};
 
-function getRankMood(index) {
-  return RANK_MOODS[Math.min(index, RANK_MOODS.length - 1)];
+function getRankMood(possibility = '') {
+  if (possibility.includes('높음')) return POSSIBILITY_MOODS.높음;
+  if (possibility.includes('낮음')) return POSSIBILITY_MOODS.낮음;
+  if (possibility.includes('확인')) return POSSIBILITY_MOODS.확인;
+  return POSSIBILITY_MOODS.default;
 }
 
 function displayValue(value, fallback = '확인 필요') {
@@ -209,7 +211,7 @@ function PolicyCard({ policy, index, onChat }) {
   const url = policy.application_url || policy.url || policy.ref_url;
   const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
   const hasEvidence = badges.length > 0 || policy.region_match || policy.domain_label || policy.source_label || policy.match_score_label;
-  const mood = getRankMood(index);
+  const mood = getRankMood(policy.apply_possibility);
   const supportSummary = policy.support_summary || policy.support_content;
   return (
     <article className="policy-card">
@@ -218,7 +220,7 @@ function PolicyCard({ policy, index, onChat }) {
           <p className="card-eyebrow">추천 정책 {index + 1}</p>
           <h3>{displayValue(policy.policy_name, '정책명 확인 필요')}</h3>
           <div className="policy-rank-row">
-            <span className={`rank-mood rank-mood-${Math.min(index + 1, RANK_MOODS.length)}`} role="img" aria-label={`${index + 1}순위 ${mood.label}`}>{mood.emoji}</span>
+            <span className={`rank-mood rank-mood-${(policy.apply_possibility || '').includes('높음') ? 1 : (policy.apply_possibility || '').includes('낮음') ? 5 : (policy.apply_possibility || '').includes('확인') ? 3 : 2}`} role="img" aria-label={mood.label}><span aria-hidden="true">{mood.emoji}</span></span>
             <span className={getPossibilityClass(policy.apply_possibility)}>{displayValue(policy.apply_possibility)}</span>
           </div>
         </div>
