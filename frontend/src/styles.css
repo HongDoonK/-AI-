@@ -282,3 +282,31 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
   .pill-wrap, .form-grid { grid-template-columns: 1fr; }
   .chat-panel { right: 16px; bottom: 16px; max-height: calc(100vh - 32px); }
 }
+
+/* 추천도 감정 표시 */
+.fit-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.emotion-face {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+.policy-card.emotion-high { border-left: 5px solid var(--green); }
+.policy-card.emotion-medium { border-left: 5px solid var(--blue); }
+.policy-card.emotion-check { border-left: 5px solid var(--orange); }
+.policy-card.emotion-low { border-left: 5px solid #64748b; }
+@media (max-width: 640px) {
+  .policy-head { flex-direction: column; }
+  .fit-area { align-self: flex-start; }
+}
