@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   Bell,
+  Calculator,
   CheckCircle2,
   ClipboardList,
   ExternalLink,
@@ -16,6 +18,9 @@ import {
   UserRound,
 } from 'lucide-react';
 import { buildAgentReport } from './agentPlanner.js';
+import { calculateIncomeTax } from './incomeTax.js';
+import { convertToMedianIncomePercent } from './medianIncome.js';
+import { findIneligiblePolicies } from './eligibilityCheck.js';
 import {
   buildPreparationItems,
   getPreparationLink,
@@ -88,6 +93,9 @@ function sanitizeProfile(profile) {
     region_sido: profile.region_sido || '',
     region_sigungu: profile.region_sigungu || '',
     employment_status: profile.employment_status || '',
+    household_size: profile.household_size ?? null,
+    monthly_income: profile.monthly_income ?? null,
+    median_income_percent: profile.median_income_percent ?? null,
     created_at: profile.created_at,
   };
 }
@@ -100,6 +108,8 @@ function buildProfileText(profile) {
   if (profile.age) parts.push(`${profile.age}세`);
   if (profile.gender) parts.push(profile.gender);
   if (profile.employment_status) parts.push(profile.employment_status);
+  if (profile.household_size) parts.push(`${profile.household_size}인 가구`);
+  if (profile.median_income_percent != null) parts.push(`기준 중위소득 대비 ${profile.median_income_percent}%`);
   return parts.join(' ');
 }
 
@@ -164,9 +174,16 @@ function LoginPanel({ profile, onLogin, saving }) {
     region_sido: profile?.region_sido || '',
     region_sigungu: profile?.region_sigungu || '',
     employment_status: profile?.employment_status || '',
+    household_size: profile?.household_size || '1',
+    monthly_income: profile?.monthly_income || '',
   }));
 
   const sigunguOptions = REGION_OPTIONS[form.region_sido] || [];
+
+  const medianIncomeInfo = useMemo(() => {
+    if (!form.monthly_income) return null;
+    return convertToMedianIncomePercent(Number(form.monthly_income) * 10000, form.household_size);
+  }, [form.monthly_income, form.household_size]);
 
   useEffect(() => {
     if (!profile) return;
@@ -176,6 +193,8 @@ function LoginPanel({ profile, onLogin, saving }) {
       region_sido: profile.region_sido || '',
       region_sigungu: profile.region_sigungu || '',
       employment_status: profile.employment_status || '',
+      household_size: profile.household_size || '1',
+      monthly_income: profile.monthly_income || '',
     });
   }, [profile]);
 
@@ -195,6 +214,9 @@ function LoginPanel({ profile, onLogin, saving }) {
       region_sido: form.region_sido,
       region_sigungu: form.region_sigungu,
       employment_status: form.employment_status,
+      household_size: form.household_size ? Number(form.household_size) : null,
+      monthly_income: form.monthly_income ? Number(form.monthly_income) : null,
+      median_income_percent: medianIncomeInfo ? Math.round(medianIncomeInfo.percent) : null,
     });
   }
 
@@ -244,12 +266,133 @@ function LoginPanel({ profile, onLogin, saving }) {
             <option value="프리랜서">프리랜서</option>
           </select>
         </label>
+        <label>
+          가구원 수 (본인 포함)
+          <select value={form.household_size} onChange={(e) => updateField('household_size', e.target.value)}>
+            {[1, 2, 3, 4, 5, 6, 7].map((size) => (
+              <option key={size} value={size}>{size}인 가구</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          월 소득 (만원)
+          <input
+            value={form.monthly_income}
+            onChange={(e) => updateField('monthly_income', e.target.value)}
+            type="number"
+            min="0"
+            step="10"
+            placeholder="예: 250 (250만 원)"
+          />
+        </label>
       </div>
+      {medianIncomeInfo && (
+        <p className="hint">
+          2026년 {medianIncomeInfo.householdSize}인 가구 기준 중위소득({formatWon(medianIncomeInfo.medianIncome)}) 대비
+          {' '}<strong>약 {Math.round(medianIncomeInfo.percent)}%</strong>로 환산되어 프로필에 함께 저장됩니다.
+        </p>
+      )}
       <button className="primary-button full-button" type="submit" disabled={saving}>
         {saving ? <><Loader2 className="spin" size={18} /> 저장 중</> : <><LogIn size={18} /> 프로필 저장</>}
       </button>
       {profile?.user_id && <p className="hint">저장 시점: {displayValue(profile.created_at)} · 사용자 ID: {profile.user_id.slice(0, 8)}</p>}
     </form>
+  );
+}
+
+function formatWon(value) {
+  if (!Number.isFinite(value)) return '0원';
+  return `${Math.round(value).toLocaleString('ko-KR')}원`;
+}
+
+function IncomeTaxCalculator() {
+  const [form, setForm] = useState({
+    annualSalary: '',
+    monthlyNonTaxable: '200000',
+    dependents: '1',
+  });
+
+  function updateField(name, value) {
+    setForm((prev) => ({ ...prev, [name]: value }));
+  }
+
+  const result = useMemo(() => {
+    const annualSalaryManwon = Number(form.annualSalary);
+    if (!annualSalaryManwon || annualSalaryManwon <= 0) return null;
+    return calculateIncomeTax(annualSalaryManwon * 10000, {
+      monthlyNonTaxable: Number(form.monthlyNonTaxable) || 0,
+      dependents: Number(form.dependents) || 1,
+    });
+  }, [form]);
+
+  return (
+    <section className="panel income-tax-panel">
+      <p className="card-eyebrow">내 근로소득 계산</p>
+      <h2><Calculator size={19} /> 연봉 실수령액 계산기</h2>
+      <p className="hint">
+        근로소득공제·종합소득세율·근로소득세액공제·4대보험요율을 반영한 근사 계산이며,
+        실제 원천징수세액(간이세액표)과는 차이가 있을 수 있습니다.
+      </p>
+      <div className="form-grid">
+        <label>
+          연봉 (세전, 만원)
+          <input
+            value={form.annualSalary}
+            onChange={(e) => updateField('annualSalary', e.target.value)}
+            type="number"
+            min="0"
+            step="10"
+            placeholder="예: 3600 (3,600만 원)"
+          />
+        </label>
+        <label>
+          월 비과세액 (원, 식대 등)
+          <input
+            value={form.monthlyNonTaxable}
+            onChange={(e) => updateField('monthlyNonTaxable', e.target.value)}
+            type="number"
+            min="0"
+            step="10000"
+            placeholder="예: 200000"
+          />
+        </label>
+        <label>
+          부양가족 수 (본인 포함)
+          <input
+            value={form.dependents}
+            onChange={(e) => updateField('dependents', e.target.value)}
+            type="number"
+            min="1"
+            max="11"
+            placeholder="1"
+          />
+        </label>
+      </div>
+
+      {result ? (
+        <>
+          <div className="pill-wrap">
+            <ValuePill label="월 예상 실수령액" value={formatWon(result.monthly.netIncome)} />
+            <ValuePill label="연 예상 실수령액" value={formatWon(result.annual.netIncome)} />
+            <ValuePill label="월 공제 합계" value={formatWon(result.monthly.deductionTotal)} />
+            <ValuePill label="연 공제 합계" value={formatWon(result.annual.deductionTotal)} />
+          </div>
+          <div className="income-tax-detail">
+            <h4>월 공제 내역 (예상)</h4>
+            <ul className="check-list">
+              <li><span>국민연금</span><strong>{formatWon(result.monthly.pension)}</strong></li>
+              <li><span>건강보험</span><strong>{formatWon(result.monthly.health)}</strong></li>
+              <li><span>장기요양보험</span><strong>{formatWon(result.monthly.longTermCare)}</strong></li>
+              <li><span>고용보험</span><strong>{formatWon(result.monthly.employment)}</strong></li>
+              <li><span>근로소득세</span><strong>{formatWon(result.monthly.incomeTax)}</strong></li>
+              <li><span>지방소득세</span><strong>{formatWon(result.monthly.localIncomeTax)}</strong></li>
+            </ul>
+          </div>
+        </>
+      ) : (
+        <p className="muted">연봉을 입력하면 4대보험과 근로소득세를 반영한 예상 실수령액을 계산해드립니다.</p>
+      )}
+    </section>
   );
 }
 
@@ -295,6 +438,48 @@ function ApplicationAgentPanel({ recommendations }) {
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function EligibilityGapPanel({ recommendations, profile }) {
+  const ineligible = useMemo(() => findIneligiblePolicies(recommendations, profile), [recommendations, profile]);
+
+  if (!hasMeaningfulProfile(profile)) return null;
+  if (!Array.isArray(recommendations) || recommendations.length === 0) return null;
+
+  return (
+    <section className="panel eligibility-panel">
+      <p className="card-eyebrow">자동 적격성 1차 검증</p>
+      <h2><AlertTriangle size={19} /> 지금은 신청이 어려운 정책</h2>
+      <p className="agent-copy">
+        저장된 프로필(나이·지역·소득)을 정책의 지원 조건과 비교해 1차로 걸러낸 결과입니다.
+        조건이 명시되지 않은 정책은 판단하지 않으며, 실제 자격은 공고문에서 다시 확인하세요.
+      </p>
+      {ineligible.length === 0 ? (
+        <p className="muted">현재 프로필 기준으로 조건 미충족이 확인된 정책이 없습니다.</p>
+      ) : (
+        <div className="agent-report-list">
+          {ineligible.map(({ policy, gaps }, idx) => (
+            <article className="report-card gap-card" key={`${policy.policy_name || 'policy'}-${idx}`}>
+              <div className="report-card-head">
+                <div>
+                  <span className="report-rank">신청 불가</span>
+                  <strong>{displayValue(policy.policy_name, '정책명 확인 필요')}</strong>
+                </div>
+              </div>
+              <ul className="task-list gap-list">
+                {gaps.map((gap, gapIdx) => (
+                  <li key={`${gap.label}-${gapIdx}`}>
+                    <AlertCircle size={15} />
+                    <span><strong>{gap.label}</strong> 조건 미충족 — {gap.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -499,17 +684,6 @@ export default function App() {
   const activeMessages = activePolicyKey ? (chatByPolicy[activePolicyKey] || []) : [];
   const selectedPrepPolicyKey = selectedPrepPolicy ? policyKey(selectedPrepPolicy) : '';
   const selectedPrepChecked = selectedPrepPolicyKey ? (checkedPrepByPolicy[selectedPrepPolicyKey] || {}) : {};
-  const displayedCondition = useMemo(() => {
-    const condition = data.user_condition || {};
-    return {
-      age: condition.age ?? profile?.age ?? null,
-      gender: condition.gender || profile?.gender || '',
-      region_sido: condition.region_sido || profile?.region_sido || '',
-      region_sigungu: condition.region_sigungu || profile?.region_sigungu || '',
-      employment_status: condition.employment_status || profile?.employment_status || '',
-    };
-  }, [data.user_condition, profile]);
-
   useEffect(() => {
     localStorage.setItem(PREP_STORAGE_KEY, JSON.stringify(checkedPrepByPolicy));
   }, [checkedPrepByPolicy]);
@@ -524,7 +698,14 @@ export default function App() {
         body: JSON.stringify(profileInput),
       });
       if (!response.ok) throw new Error(`사용자 저장 실패: ${response.status}`);
-      const savedProfile = sanitizeProfile(await response.json());
+      // 백엔드 사용자 모델에는 가구원수/월소득/중위소득 비율 항목이 없어 응답에 포함되지 않으므로,
+      // 입력값을 그대로 합쳐서 프런트에서 함께 보관한다.
+      const savedProfile = sanitizeProfile({
+        ...(await response.json()),
+        household_size: profileInput.household_size,
+        monthly_income: profileInput.monthly_income,
+        median_income_percent: profileInput.median_income_percent,
+      });
       setProfile(savedProfile);
       localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(savedProfile));
     } catch (error) {
@@ -657,7 +838,9 @@ export default function App() {
       <section className="result-grid">
         <aside className="left-column">
           <LoginPanel profile={profile} onLogin={handleLogin} saving={savingProfile} />
+          <IncomeTaxCalculator />
           <ApplicationAgentPanel recommendations={data.recommendations} />
+          <EligibilityGapPanel recommendations={data.recommendations} profile={profile} />
           {selectedPrepPolicy && (
             <PreparationBoard
               policy={selectedPrepPolicy}
@@ -667,17 +850,6 @@ export default function App() {
           )}
           {result && (
             <>
-              <div className="panel">
-                <p className="card-eyebrow">AI 분석 결과</p>
-                <h2>사용자 조건</h2>
-                <div className="pill-wrap">
-                  <ValuePill label="나이" value={displayedCondition.age ? `${displayedCondition.age}세` : null} />
-                  <ValuePill label="성별" value={displayedCondition.gender} />
-                  <ValuePill label="시도" value={displayedCondition.region_sido} />
-                  <ValuePill label="시군구" value={displayedCondition.region_sigungu} />
-                  <ValuePill label="취업 상태" value={displayedCondition.employment_status} />
-                </div>
-              </div>
               <div className="panel blue-panel">
                 <p className="card-eyebrow">상담 연결</p>
                 <h2>가까운 청년센터</h2>

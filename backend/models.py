@@ -73,6 +73,11 @@ class PolicyResult(BaseModel):
     region_sigungu:    str          = Field(default="", description="정책 시군구")
     region_match:      str          = Field(default="", description="지역 매칭 설명")
     match_badges:      list[str]    = Field(default_factory=list, description="추천 근거 배지")
+    min_age:           int | None   = Field(None, description="지원대상 최소 연령")
+    max_age:           int | None   = Field(None, description="지원대상 최대 연령")
+    income_type:       str          = Field(default="", description="소득조건 구분 (무관/연소득/기타)")
+    income_min:        int | None   = Field(None, description="소득 조건 하한 (만원, 연소득 기준)")
+    income_max:        int | None   = Field(None, description="소득 조건 상한 (만원, 연소득 기준)")
 
 
 class ChatMessage(BaseModel):

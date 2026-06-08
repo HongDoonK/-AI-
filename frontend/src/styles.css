@@ -191,7 +191,8 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
   border-color: #bfdbfe;
   box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
 }
-.login-panel label {
+.login-panel label,
+.income-tax-panel label {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -199,6 +200,7 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
   font-size: 13px;
   font-weight: 800;
 }
+.income-tax-panel .form-grid label { justify-content: flex-end; }
 .agent-panel h2 {
   display: flex;
   align-items: center;
@@ -350,6 +352,12 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
   margin-top: 2px;
   color: var(--green);
 }
+.gap-card {
+  border-color: #fecaca;
+  background: linear-gradient(135deg, rgba(254, 242, 242, .96), rgba(255, 247, 237, .8));
+}
+.gap-card .report-rank { color: #b91c1c; }
+.gap-list svg { color: #dc2626; }
 .empty-report {
   display: flex;
   gap: 10px;
@@ -658,6 +666,10 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
 .check-list { padding-left: 0; list-style: none; }
 .check-list li { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .check-list svg { color: var(--green); }
+.income-tax-detail { margin-top: 14px; }
+.income-tax-detail h4 { margin: 0 0 8px; font-size: 14px; }
+.income-tax-detail .check-list li { justify-content: space-between; }
+.income-tax-detail .check-list span { color: var(--muted); }
 .policy-actions {
   display: flex;
   flex-wrap: wrap;

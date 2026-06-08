@@ -344,6 +344,13 @@ def _region_match_label(condition: dict, row: dict) -> str:
     return "지역 확인 필요"
 
 
+def _int_or_none(value) -> int | None:
+    parsed = pd.to_numeric(value, errors="coerce")
+    if pd.isna(parsed) or int(parsed) == 0:
+        return None
+    return int(parsed)
+
+
 def _metadata(row: dict, condition: dict) -> dict:
     domain = _clean(row.get("domain")) or _clean(row.get("category_main"))
     source_table = _clean(row.get("source_table")) or _clean(row.get("category_sub"))
@@ -370,6 +377,11 @@ def _metadata(row: dict, condition: dict) -> dict:
         "region_sigungu": _clean(row.get("region_sigungu")),
         "region_match": region_label,
         "match_badges": badges,
+        "min_age": _int_or_none(row.get("min_age")),
+        "max_age": _int_or_none(row.get("max_age")),
+        "income_type": _clean(row.get("income_type")),
+        "income_min": _int_or_none(row.get("income_min")),
+        "income_max": _int_or_none(row.get("income_max")),
     }
 
 
@@ -551,6 +563,12 @@ def generate_recommendations_with_llm(
         "Write concise Korean explanations that a student can understand. "
         "For support_content and support_summary, do abstractive summarization: do not copy the raw support text; "
         "rewrite the actual benefit in 1-2 short Korean sentences, focusing on amount, duration, housing rent, loan limit, training fee, or service content when available. "
+        "If the user's request is about saving up a lump sum or building assets (e.g. '목돈 마련', '저축', '자산 형성', '적금', '재테크', '투자 공부'), "
+        "do not just restate a subsidy amount — explain HOW the policy helps them save or grow money: "
+        "the savings/matching structure (e.g. monthly deposit + government matching, interest bonus), "
+        "asset-formation account programs (청년도약계좌, 청년내일저축계좌, 희망두배 청년통장 등), "
+        "or financial/investment education content (금융 교육, 자산관리 상담, 투자·주식 스터디 프로그램) when the candidate is that type of policy. "
+        "Prefer candidates that match this savings/asset-building intent over plain one-time cash subsidies when both are present. "
         "apply_possibility must be one of: 높음, 확인 필요, 낮음. "
         "Each checklist should contain 3 to 5 practical application checks."
     )
