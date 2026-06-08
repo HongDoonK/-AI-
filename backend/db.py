@@ -1,13 +1,9 @@
-# db.py
-# ──────────────────────────────────────────────────────────────
-# SQLite DB 연결 및 테이블 생성
-# ──────────────────────────────────────────────────────────────
-
-import sqlite3
 import os
+import sqlite3
 import sys
 import uuid
-from backend.config import POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS, CENTER_COLUMNS
+
+from backend.config import CENTER_COLUMNS, POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS
 from backend.region_map import get_region_code
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -25,7 +21,6 @@ DB_PATH = next((path for path in _DB_CANDIDATES if os.path.exists(path)), _DB_CA
 
 
 def get_connection():
-    """DB 연결을 반환하는 함수"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -54,7 +49,6 @@ def _ensure_users_table(cursor):
 
 
 def _build_policies_ddl(table_name: str, columns: dict) -> str:
-    """policies 계열 테이블 CREATE 문 생성"""
     p = columns
     return f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
@@ -110,26 +104,26 @@ def _build_policies_ddl(table_name: str, columns: dict) -> str:
 def _ensure_search_documents_table(cursor):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS search_documents (
-            doc_id           TEXT PRIMARY KEY,
-            source_table     TEXT NOT NULL,
-            source_id        TEXT NOT NULL,
-            domain           TEXT NOT NULL,
-            title            TEXT,
-            summary          TEXT,
-            region_name      TEXT,
-            region_sido      TEXT,
-            region_sigungu   TEXT,
-            target           TEXT,
-            min_age          INTEGER,
-            max_age          INTEGER,
+            doc_id            TEXT PRIMARY KEY,
+            source_table      TEXT NOT NULL,
+            source_id         TEXT NOT NULL,
+            domain            TEXT NOT NULL,
+            title             TEXT,
+            summary           TEXT,
+            region_name       TEXT,
+            region_sido       TEXT,
+            region_sigungu    TEXT,
+            target            TEXT,
+            min_age           INTEGER,
+            max_age           INTEGER,
             employment_status TEXT,
-            status           TEXT,
-            apply_start_date TEXT,
-            apply_end_date   TEXT,
-            url              TEXT,
-            search_text      TEXT,
-            raw_ref          TEXT,
-            collected_at     TEXT
+            status            TEXT,
+            apply_start_date  TEXT,
+            apply_end_date    TEXT,
+            url               TEXT,
+            search_text       TEXT,
+            raw_ref           TEXT,
+            collected_at      TEXT
         )
     """)
     cursor.execute("PRAGMA table_info(search_documents)")
@@ -138,35 +132,20 @@ def _ensure_search_documents_table(cursor):
         cursor.execute("ALTER TABLE search_documents ADD COLUMN region_sido TEXT")
     if "region_sigungu" not in columns:
         cursor.execute("ALTER TABLE search_documents ADD COLUMN region_sigungu TEXT")
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_search_documents_domain ON search_documents(domain)"
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_search_documents_region ON search_documents(region_name)"
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_search_documents_region_sido ON search_documents(region_sido)"
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_search_documents_region_sigungu ON search_documents(region_sigungu)"
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)"
-    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_domain ON search_documents(domain)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_region ON search_documents(region_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_region_sido ON search_documents(region_sido)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_region_sigungu ON search_documents(region_sigungu)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)")
 
 
 def create_tables():
-    """policies, policies_processed, centers 테이블 생성"""
     conn = get_connection()
     cursor = conn.cursor()
 
-    # ── policies 테이블 (원본) ────────────────────────────────
     cursor.execute(_build_policies_ddl("policies", POLICY_COLUMNS))
-
-    # ── policies_processed 테이블 (전처리본) ──────────────────
     cursor.execute(_build_policies_ddl("policies_processed", POLICY_PROCESSED_COLUMNS))
 
-    # ── centers 테이블 ────────────────────────────────────────
     c = CENTER_COLUMNS
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS centers (
@@ -188,11 +167,10 @@ def create_tables():
 
     conn.commit()
     conn.close()
-    print("✅ DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents)")
+    print("DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents)")
 
 
 def get_centers_by_region(region: str) -> list:
-    """시도명 또는 시군구명으로 청년센터 조회 (부분 일치)"""
     c = CENTER_COLUMNS
     conn = get_connection()
     cursor = conn.cursor()
@@ -200,11 +178,12 @@ def get_centers_by_region(region: str) -> list:
         f"""SELECT * FROM centers
             WHERE {c['center_ctpv_nm']} LIKE ?
             OR {c['center_sgg_nm']} LIKE ?""",
-        (f"%{region}%", f"%{region}%")
+        (f"%{region}%", f"%{region}%"),
     )
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
 
 def get_policies_by_region(sido: str, sigungu: str) -> list:
     code = get_region_code(sido, sigungu)
@@ -214,7 +193,7 @@ def get_policies_by_region(sido: str, sigungu: str) -> list:
     cursor = conn.cursor()
     cursor.execute(
         "SELECT * FROM policies_processed WHERE region LIKE ?",
-        (f"%{code}%",)
+        (f"%{code}%",),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -222,7 +201,6 @@ def get_policies_by_region(sido: str, sigungu: str) -> list:
 
 
 def save_user(user_data: dict) -> str:
-    """사용자 조건 저장 후 user_id 반환"""
     user_id = str(uuid.uuid4())
     conn = get_connection()
     cursor = conn.cursor()
@@ -253,7 +231,6 @@ def save_user(user_data: dict) -> str:
 
 
 def get_user(user_id: str) -> dict | None:
-    """user_id로 저장된 사용자 조건 조회"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -262,7 +239,6 @@ def get_user(user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-# ── 직접 실행 시 테이블 생성 테스트 ──────────────────────────
 if __name__ == "__main__":
     create_tables()
 
@@ -271,7 +247,7 @@ if __name__ == "__main__":
 
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = cursor.fetchall()
-    print(f"\n테이블 목록: {[t['name'] for t in tables]}")
+    print(f"\n테이블 목록: {[table['name'] for table in tables]}")
 
     for table in tables:
         cursor.execute(f"PRAGMA table_info({table['name']})")
@@ -281,4 +257,4 @@ if __name__ == "__main__":
             print(f"  {col['name']} ({col['type']})")
 
     conn.close()
-    print("\n✅ youth_policy.db 생성 완료")
+    print("\nyouth_policy.db 확인 완료")
