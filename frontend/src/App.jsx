@@ -9,9 +9,7 @@ import {
   ExternalLink,
   Loader2,
   LogIn,
-  MapPin,
   MessageCircle,
-  Phone,
   Search,
   Send,
   Sparkles,
@@ -21,6 +19,7 @@ import { buildAgentReport } from './agentPlanner.js';
 import { calculateIncomeTax } from './incomeTax.js';
 import { convertToMedianIncomePercent } from './medianIncome.js';
 import { findIneligiblePolicies } from './eligibilityCheck.js';
+import { getScoreMood } from './scoreMood.js';
 import {
   buildPreparationItems,
   getPreparationLink,
@@ -542,6 +541,7 @@ function PolicyCard({ policy, index, onChat, onPrepare }) {
     policy.source_label ||
     policy.match_score_label;
   const supportSummary = policy.support_summary || policy.support_content;
+  const scoreMood = getScoreMood(policy);
 
   return (
     <article className="policy-card">
@@ -561,7 +561,16 @@ function PolicyCard({ policy, index, onChat, onPrepare }) {
         <section className="evidence-box">
           <div className="evidence-head">
             <strong>추천 근거</strong>
-            {policy.match_score_label && <span>{displayValue(policy.match_method, '검색 점수')} {policy.match_score_label}</span>}
+            {policy.match_score_label && (
+              <div className="score-summary">
+                {scoreMood && (
+                  <span className={scoreMood.className} aria-label={scoreMood.label} title={scoreMood.label}>
+                    {scoreMood.emoji}
+                  </span>
+                )}
+                <span>{displayValue(policy.match_method, '검색 점수')} {policy.match_score_label}</span>
+              </div>
+            )}
           </div>
           <div className="evidence-grid">
             {badges.map((badge, idx) => (
@@ -635,23 +644,6 @@ function ChatPanel({ policy, messages, input, loading, suggestions, onInput, onS
         <button className="primary-button icon-button" type="submit" disabled={loading || !input.trim()}><Send size={17} /></button>
       </form>
     </section>
-  );
-}
-
-function CenterCard({ center }) {
-  const name = center.center_name || center.cntrNm;
-  const address = center.center_addr || center.cntrAddr;
-  const detailAddress = center.center_daddr || center.cntrDaddr;
-  const phone = center.center_tel || center.cntrTelno;
-  const url = center.center_url || center.cntrUrlAddr;
-  return (
-    <article className="center-card">
-      <div className="center-title"><MapPin size={18} /><h3>{displayValue(name, '센터명 확인 필요')}</h3></div>
-      <p>{displayValue(address, '주소 확인 필요')}</p>
-      {detailAddress && <p className="muted">{detailAddress}</p>}
-      <p className="phone"><Phone size={15} /> {displayValue(phone, '전화번호 확인 필요')}</p>
-      {url && <a className="link-button secondary" href={url} target="_blank" rel="noreferrer">센터 홈페이지 <ExternalLink size={15} /></a>}
-    </article>
   );
 }
 
@@ -847,23 +839,6 @@ export default function App() {
               checkedItems={selectedPrepChecked}
               onToggle={togglePreparation}
             />
-          )}
-          {result && (
-            <>
-              <div className="panel blue-panel">
-                <p className="card-eyebrow">상담 연결</p>
-                <h2>가까운 청년센터</h2>
-                {data.centers.length === 0 ? (
-                  <p className="muted">지역 조건에 맞는 센터 정보가 아직 없습니다.</p>
-                ) : (
-                  <div className="center-list">
-                    {data.centers.slice(0, 5).map((center, index) => (
-                      <CenterCard center={center} key={`${center.center_name || center.cntrNm}-${index}`} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
           )}
         </aside>
 
