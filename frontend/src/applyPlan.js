@@ -69,6 +69,13 @@ export function groupChecklist(plan) {
   return groups;
 }
 
+export function getDeadlineUrgency(daysLeft) {
+  if (daysLeft == null) return { label: '상시', className: 'badge' };
+  if (daysLeft < 0) return { label: '마감 지남', className: 'badge gray' };
+  if (daysLeft <= 7) return { label: `D-${daysLeft} 임박`, className: 'badge orange' };
+  return { label: `D-${daysLeft}`, className: 'badge blue' };
+}
+
 export function isChecklistLocked(status) {
   return ['submitted', 'done', 'expired'].includes(status);
 }
@@ -133,4 +140,12 @@ export function updateApplyStatus(baseUrl, applicationId, status) {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
+}
+
+export function fetchApplications(baseUrl, userId) {
+  return requestJson(`${baseUrl}/agent/applications?user_id=${encodeURIComponent(userId)}`, { method: 'GET' });
+}
+
+export function fetchApplication(baseUrl, applicationId) {
+  return requestJson(`${baseUrl}/agent/applications/${applicationId}`, { method: 'GET' });
 }

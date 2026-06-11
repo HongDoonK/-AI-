@@ -37,7 +37,14 @@ import {
   resolveApiBaseUrl,
 } from './appConfig.js';
 import ApplyPanel from './components/ApplyPanel.jsx';
-import { createApplyPlan, toggleApplyItem, updateApplyStatus } from './applyPlan.js';
+import MyApplicationsPanel from './components/MyApplicationsPanel.jsx';
+import {
+  createApplyPlan,
+  fetchApplication,
+  fetchApplications,
+  toggleApplyItem,
+  updateApplyStatus,
+} from './applyPlan.js';
 
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
 const RECOMMEND_URL = `${API_BASE_URL}/recommend`;
@@ -626,6 +633,8 @@ export default function App() {
   const [chatSuggestions, setChatSuggestions] = useState([]);
   const [selectedPrepPolicy, setSelectedPrepPolicy] = useState(null);
   const [applyPlan, setApplyPlan] = useState(null);
+  const [myApplications, setMyApplications] = useState([]);
+  const [myApplicationsLoading, setMyApplicationsLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyError, setApplyError] = useState('');
   const [checkedPrepByPolicy, setCheckedPrepByPolicy] = useState(() => {
@@ -721,12 +730,46 @@ export default function App() {
     ]);
   }
 
+  async function refreshMyApplications(userId) {
+    if (!userId) {
+      setMyApplications([]);
+      return;
+    }
+    setMyApplicationsLoading(true);
+    try {
+      setMyApplications(await fetchApplications(API_BASE_URL, userId));
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setMyApplicationsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshMyApplications(profile?.user_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.user_id]);
+
+  async function openMyApplication(applicationId) {
+    setApplyLoading(true);
+    setApplyError('');
+    try {
+      setApplyPlan(await fetchApplication(API_BASE_URL, applicationId));
+    } catch (error) {
+      setApplyError('신청 건을 불러오지 못했습니다.');
+      console.error(error);
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
   async function startApplyPlan(policy) {
     setApplyLoading(true);
     setApplyError('');
     try {
       const plan = await createApplyPlan(API_BASE_URL, policy, profile?.user_id);
       setApplyPlan(plan);
+      refreshMyApplications(profile?.user_id);
     } catch (error) {
       setApplyPlan(null);
       setApplyError('신청 플랜을 만들지 못했습니다. 백엔드 서버를 확인해주세요.');
@@ -754,6 +797,7 @@ export default function App() {
       const updated = await updateApplyStatus(API_BASE_URL, applyPlan.application_id, status);
       setApplyPlan((prev) => ({ ...prev, ...updated }));
       setApplyError('');
+      refreshMyApplications(profile?.user_id);
     } catch (error) {
       setApplyError('상태를 변경하지 못했습니다.');
       console.error(error);
@@ -839,6 +883,11 @@ export default function App() {
           <IncomeTaxCalculator />
           <ApplicationAgentPanel recommendations={data.recommendations} />
           <EligibilityGapPanel recommendations={data.recommendations} profile={profile} />
+          <MyApplicationsPanel
+            applications={myApplications}
+            loading={myApplicationsLoading}
+            onOpen={openMyApplication}
+          />
           {(applyPlan || applyLoading) && (
             <ApplyPanel
               plan={applyPlan}

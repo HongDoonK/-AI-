@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   computeDaysLeft,
+  getDeadlineUrgency,
   formatDeadlineLabel,
   getApplyProgress,
   getEligibilityBadge,
@@ -77,4 +78,12 @@ test('getNextStatusActions follows state machine', () => {
   assert.equal(getNextStatusActions({ status: 'ready', checklist: [] })[0].status, 'submitted');
   assert.equal(getNextStatusActions({ status: 'submitted', checklist: [] })[0].status, 'done');
   assert.deepEqual(getNextStatusActions({ status: 'done', checklist: [] }), []);
+});
+
+test('getDeadlineUrgency thresholds', () => {
+  assert.equal(getDeadlineUrgency(null).label, '상시');
+  assert.equal(getDeadlineUrgency(-1).className, 'badge gray');
+  assert.equal(getDeadlineUrgency(3).className, 'badge orange');
+  assert.equal(getDeadlineUrgency(3).label, 'D-3 임박');
+  assert.equal(getDeadlineUrgency(30).className, 'badge blue');
 });

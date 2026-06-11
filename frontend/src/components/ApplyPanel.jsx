@@ -100,6 +100,25 @@ export default function ApplyPanel({ plan, loading, error, onToggleItem, onStatu
       <ChecklistGroup title={GROUP_TITLES.eligibility} items={groups.eligibility} locked={locked} onToggleItem={onToggleItem} />
       <ChecklistGroup title={GROUP_TITLES.action} items={groups.action} locked={locked} onToggleItem={onToggleItem} />
 
+      {plan.draft_answers && Object.keys(plan.draft_answers).length > 0 && (
+        <section className="mini-section">
+          <h4>신청서 초안 (AI 작성, 제출 전 꼭 수정·확인)</h4>
+          {Object.entries(plan.draft_answers).map(([field, text]) => (
+            <div key={field} className="prep-item-content" style={{ marginBottom: '8px' }}>
+              <strong className="prep-item-text">{field}</strong>
+              <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(text)}
+              >
+                복사
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
       {plan.next_action && <p className="hint">{plan.next_action}</p>}
 
       <div className="policy-actions">
