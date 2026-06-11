@@ -117,6 +117,10 @@ class PolicyChatAgent:
         title = _clean(policy_context.get("title"))
         return f"title:{title}" if title else ""
 
+    def load_policy_context(self, policy: dict[str, Any]) -> dict[str, Any]:
+        """공개 API: 신청 도우미(ApplyAgent) 등 다른 모듈이 정책 컨텍스트를 재사용한다."""
+        return self._load_policy_context(policy)
+
     def _load_policy_context(self, policy: dict[str, Any]) -> dict[str, Any]:
         requested_cache_key = self._policy_cache_key(policy)
         if requested_cache_key and requested_cache_key in self._context_cache:

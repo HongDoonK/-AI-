@@ -271,6 +271,21 @@ VITE_API_URL=http://127.0.0.1:8000
 
 정책별 상담 에이전트는 DB 원문과 통합 검색 문서를 다시 조회해 제출 서류, 자격 조건, 신청 방법, 기간, 문의처를 답변합니다.
 
+### 신청 도우미 에이전트
+
+`POST /agent/apply-plan`
+
+추천된 정책 1건에 대해 적격성 판정, 제출 서류 체크리스트(발급처 링크 포함), 신청 채널, 마감 D-day를 묶은 신청 플랜을 생성합니다. 동일 사용자가 같은 정책으로 다시 호출하면 진행 중인 플랜을 그대로 반환합니다(멱등).
+
+```json
+{
+  "policy": {"doc_id": "policies_processed:...", "source_table": "policies_processed", "source_id": "..."},
+  "user_id": "저장된 사용자 ID (선택)"
+}
+```
+
+생성된 신청 건은 `GET /agent/applications?user_id=`, `GET /agent/applications/{id}`로 조회하고, `PATCH /agent/applications/{id}` (상태 전이: preparing → ready → submitted → done), `PATCH /agent/applications/{id}/items/{item_id}` (체크 토글)로 진행 상황을 관리합니다. 신청 데이터는 사용자 DB(`data/user_data.db`)에 저장됩니다. 실제 제출은 본인인증이 필요하므로 신청 페이지 링크로 연결하며, 자동 제출은 하지 않습니다 (설계: `docs/AGENT_APPLY_DESIGN.md`).
+
 ## 추천 흐름
 
 ```text
@@ -387,4 +402,24 @@ npm test
 npm run build
 ```
 
-테스트는 OpenAI/FAISS 없이도 fallback 경로로 동작하도록 작성되어 있습니다 (`USE_
+테스트는 OpenAI/FAISS 없이도 fallback 경로로 동작하도록 작성되어 있습니다 (`USE_OPENAI_LLM=0`, `USE_FAISS=0`).
+
+API 레벨 검증:
+
+- `GET /`: 200 응답
+- `GET /chat/status`: 200 응답
+- `POST /recommend`: 200 응답, 추천 정책 5개 반환
+- `POST /chat`: 200 응답, 정책별 후속 상담 정상 응답
+- `USE_FAISS=1` 상태에서 `match_method`가 `FAISS 임베딩`인 추천 결과 반환 확인
+- `backend.preprocessing` 실행 후 `search_documents` 16,571건 생성 확인
+
+평가 기준 관점에서는 RAG와 워크플로우 기반 복합 로직은 강하게 구현되어 있습니다. 다만 OpenAI의 명시적 function calling을 직접 사용하기보다는 내부 모듈을 도구처럼 순차 호출하는 구조이므로, 발표에서는 이 부분을 "도구형 모듈 호출 기반 에이전트 워크플로우"로 설명하는 것이 적절합니다.
+
+## 주의 사항
+
+- `.env`에는 API 키가 들어가므로 공개 저장소에 올리지 않습니다.
+- `data/youth_policy.db`를 삭제하면 정책/센터 데이터를 다시 수집하고 전처리해야 합니다.
+- `search_documents`가 비어 있으면 `python -m backend.preprocessing`을 다시 실행합니다.
+- `data/index/*.npy`는 FAISS 임베딩 캐시입니다. 정책 데이터가 바뀌면 새 캐시가 자동 생성될 수 있습니다.
+- `frontend/node_modules`와 빌드 결과물은 `npm install`, `npm run build`로 다시 만들 수 있습니다.
+- OpenAI 또는 FAISS 의존성이 없어도 fallback 로직으로 기본 추천은 동작하지만, 추천 품질은 달라질 수 있습니다.

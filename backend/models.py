@@ -159,3 +159,51 @@ class UserResponse(BaseModel):
     region_sigungu:    str | None = None
     employment_status: str | None = None
     created_at:        str | None = None
+
+
+# ════════════════════════════════════════════════════════════════
+# 3. 신청 도우미 (Apply Assistant Agent) — docs/AGENT_APPLY_DESIGN.md
+# ════════════════════════════════════════════════════════════════
+
+class ApplyPlanRequest(BaseModel):
+    policy:  dict[str, Any]  = Field(..., description="추천 정책 식별 정보 (doc_id/source_table/source_id)")
+    user_id: str | None      = Field(None, description="저장된 사용자 프로필 ID (선택)")
+
+
+class ChecklistItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    item_id:    str         = Field(default="", description="체크리스트 항목 ID")
+    kind:       str         = Field(default="action", description="document | eligibility | action")
+    label:      str         = Field(..., description="항목 내용")
+    help_label: str | None  = Field(None, description="발급처/도움말 라벨")
+    help_url:   str | None  = Field(None, description="발급처/신청 링크")
+    checked:    bool        = Field(default=False, description="체크 여부")
+
+
+class ApplicationResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    application_id:    str                  = Field(..., description="신청 건 ID")
+    doc_id:            str                  = Field(default="", description="정책 문서 ID")
+    policy_name:       str | None           = Field(None, description="정책명")
+    status:            str                  = Field(..., description="preparing/ready/submitted/done/expired")
+    eligibility:       str | None           = Field(None, description="ok | needs_info | ineligible")
+    eligibility_notes: list[dict[str, Any]] = Field(default_factory=list, description="확인 필요/불일치 사유")
+    apply_channel:     str | None           = Field(None, description="online | visit | mail | contact")
+    apply_url:         str | None           = Field(None, description="신청 URL")
+    apply_deadline:    str | None           = Field(None, description="마감일(ISO) 또는 '상시'")
+    days_left:         int | None           = Field(None, description="마감까지 남은 일수")
+    checklist:         list[ChecklistItem]  = Field(default_factory=list, description="신청 체크리스트")
+    progress:          dict[str, int]       = Field(default_factory=dict, description="체크 진행률")
+    next_action:       str | None           = Field(None, description="다음 행동 안내")
+    created_at:        str | None           = None
+    updated_at:        str | None           = None
+
+
+class ApplicationStatusRequest(BaseModel):
+    status: str = Field(..., description="전이할 상태")
+
+
+class ItemCheckRequest(BaseModel):
+    checked: bool = Field(..., description="체크 여부")
