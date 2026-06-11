@@ -36,6 +36,8 @@ import {
   normalizeResult,
   resolveApiBaseUrl,
 } from './appConfig.js';
+import ApplyPanel from './components/ApplyPanel.jsx';
+import { createApplyPlan, toggleApplyItem, updateApplyStatus } from './applyPlan.js';
 
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
 const RECOMMEND_URL = `${API_BASE_URL}/recommend`;
@@ -489,7 +491,7 @@ function PreparationBoard({ policy, checkedItems, onToggle }) {
   );
 }
 
-function PolicyCard({ policy, index, onChat, onPrepare }) {
+function PolicyCard({ policy, index, onChat, onPrepare, onApply }) {
   const checklist = Array.isArray(policy.checklist) ? policy.checklist : [];
   const url = policy.application_url || policy.url || policy.ref_url;
   const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
@@ -555,6 +557,7 @@ function PolicyCard({ policy, index, onChat, onPrepare }) {
         </section>
       )}
       <div className="policy-actions">
+        <button className="primary-button" type="button" onClick={() => onApply(policy)}><Send size={16} /> 신청 준비하기</button>
         <button className="ghost-button" type="button" onClick={() => onPrepare(policy)}><ClipboardList size={16} /> 준비 체크 시작</button>
         <button className="ghost-button" type="button" onClick={() => onChat(policy)}><MessageCircle size={16} /> 정책 상담하기</button>
         {url && <a className="link-button" href={url} target="_blank" rel="noreferrer">신청/참고 링크 열기 <ExternalLink size={15} /></a>}
@@ -622,6 +625,9 @@ export default function App() {
   const [chatByPolicy, setChatByPolicy] = useState({});
   const [chatSuggestions, setChatSuggestions] = useState([]);
   const [selectedPrepPolicy, setSelectedPrepPolicy] = useState(null);
+  const [applyPlan, setApplyPlan] = useState(null);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyError, setApplyError] = useState('');
   const [checkedPrepByPolicy, setCheckedPrepByPolicy] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem(PREP_STORAGE_KEY) || '{}');
@@ -693,6 +699,8 @@ export default function App() {
       setErrorMessage(nextResult?.message || '');
       setActivePolicy(null);
       setSelectedPrepPolicy(null);
+      setApplyPlan(null);
+      setApplyError('');
       setChatInput('');
       setChatSuggestions([]);
     } catch (error) {
@@ -711,6 +719,45 @@ export default function App() {
       '내가 신청 가능할까?',
       '신청 순서를 알려줘',
     ]);
+  }
+
+  async function startApplyPlan(policy) {
+    setApplyLoading(true);
+    setApplyError('');
+    try {
+      const plan = await createApplyPlan(API_BASE_URL, policy, profile?.user_id);
+      setApplyPlan(plan);
+    } catch (error) {
+      setApplyPlan(null);
+      setApplyError('신청 플랜을 만들지 못했습니다. 백엔드 서버를 확인해주세요.');
+      console.error(error);
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
+  async function handleApplyItemToggle(itemId, checked) {
+    if (!applyPlan) return;
+    try {
+      const updated = await toggleApplyItem(API_BASE_URL, applyPlan.application_id, itemId, checked);
+      setApplyPlan((prev) => ({ ...prev, ...updated }));
+      setApplyError('');
+    } catch (error) {
+      setApplyError('체크 상태를 저장하지 못했습니다.');
+      console.error(error);
+    }
+  }
+
+  async function handleApplyStatusChange(status) {
+    if (!applyPlan) return;
+    try {
+      const updated = await updateApplyStatus(API_BASE_URL, applyPlan.application_id, status);
+      setApplyPlan((prev) => ({ ...prev, ...updated }));
+      setApplyError('');
+    } catch (error) {
+      setApplyError('상태를 변경하지 못했습니다.');
+      console.error(error);
+    }
   }
 
   function openPreparationBoard(policy) {
@@ -792,6 +839,15 @@ export default function App() {
           <IncomeTaxCalculator />
           <ApplicationAgentPanel recommendations={data.recommendations} />
           <EligibilityGapPanel recommendations={data.recommendations} profile={profile} />
+          {(applyPlan || applyLoading) && (
+            <ApplyPanel
+              plan={applyPlan}
+              loading={applyLoading}
+              error={applyError}
+              onToggleItem={handleApplyItemToggle}
+              onStatusChange={handleApplyStatusChange}
+            />
+          )}
           {selectedPrepPolicy && (
             <PreparationBoard
               policy={selectedPrepPolicy}
@@ -835,6 +891,7 @@ export default function App() {
                       index={index}
                       onChat={openPolicyChat}
                       onPrepare={openPreparationBoard}
+                      onApply={startApplyPlan}
                       key={`${policy.policy_name}-${index}`}
                     />
                   ))}
