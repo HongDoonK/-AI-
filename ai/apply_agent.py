@@ -1,8 +1,9 @@
-"""신청 도우미 에이전트 (Phase 1: 규칙 기반).
+"""신청 도우미 에이전트.
 
 추천된 정책 1건에 대해 적격성 판정 → 서류/자격/액션 체크리스트 →
-신청 채널 결정 → D-day 계산을 수행해 '신청 플랜'을 만든다.
-LLM 없이 항상 동작한다 (LLM 초안 작성은 Phase 2).
+신청 채널 결정 → D-day 계산 → (LLM 가용 시) 신청서 초안 작성을 수행해
+'신청 플랜'을 만든다. ①~⑤는 규칙 기반이라 LLM 없이 항상 동작하고,
+⑥ 초안 작성만 LLM에 의존하며 실패 시 조용히 생략된다.
 
 설계: docs/AGENT_APPLY_DESIGN.md
 """
@@ -12,6 +13,7 @@ from datetime import date
 from typing import Any
 
 from ai.chat_text_utils import _clean, _split_items
+from ai.llm_client import LLMUnavailable, create_structured_output, llm_enabled
 from ai.document_registry import find_issuer
 from ai.policy_chat_agent import PolicyChatAgent
 from ai.retriever import _extract_apply_end
@@ -58,6 +60,22 @@ def check_eligibility(context: dict[str, Any], profile: dict[str, Any] | None) -
                 "reason": f"정책 지역({policy_region or policy_sido})과 거주지({user_sido})가 다릅니다.",
             })
             ineligible = True
+
+    policy_employment = _clean(context.get("employment_status"))
+    user_employment = _clean(profile.get("employment_status"))
+    if policy_employment and policy_employment not in {"무관", "제한없음"}:
+        if not user_employment:
+            notes.append({"field": "employment_status",
+                          "reason": f"취업 상태 조건({policy_employment})이 있으나 프로필에 취업 상태가 없습니다."})
+        elif user_employment not in policy_employment and policy_employment not in user_employment:
+            notes.append({"field": "employment_status",
+                          "reason": f"정책 취업 상태 조건({policy_employment})과 프로필({user_employment})이 다를 수 있습니다."})
+
+    original = context.get("original") or {}
+    income_type = _clean(original.get("income_type"))
+    if income_type and income_type != "무관" and not _clean(profile.get("income")):
+        notes.append({"field": "income",
+                      "reason": f"소득 조건({income_type})이 있으나 프로필에 소득 정보가 없습니다."})
 
     if ineligible:
         return "ineligible", notes
@@ -158,6 +176,67 @@ def build_checklist(
     return items
 
 
+_DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "apply_reason": {"type": "string", "description": "신청 사유 초안 (3~5문장, 정중한 문어체)"},
+        "usage_plan": {"type": "string", "description": "지원금/지원 내용 활용 계획 초안 (2~4문장)"},
+    },
+    "required": ["apply_reason", "usage_plan"],
+    "additionalProperties": False,
+}
+
+DRAFT_FIELD_LABELS = {
+    "apply_reason": "신청 사유",
+    "usage_plan": "활용 계획",
+}
+
+
+def generate_draft_answers(context: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, str] | None:
+    """신청서 단골 항목 초안을 LLM으로 작성한다. LLM 불가 시 None (플랜은 계속 진행)."""
+    if not llm_enabled():
+        return None
+    profile = profile or {}
+    profile_text = ", ".join(
+        f"{key}: {value}"
+        for key, value in [
+            ("나이", profile.get("age")),
+            ("거주지", " ".join(filter(None, [_clean(profile.get("region_sido")), _clean(profile.get("region_sigungu"))]))),
+            ("취업 상태", profile.get("employment_status")),
+        ]
+        if _clean(value)
+    ) or "정보 없음"
+    user_prompt = (
+        f"정책명: {_clean(context.get('title'))}\n"
+        f"지원 내용: {_clean(context.get('summary'))[:600]}\n"
+        f"지원 대상: {_clean(context.get('target'))[:300]}\n"
+        f"신청자 정보: {profile_text}\n\n"
+        "위 정보를 바탕으로 신청서에 쓸 초안을 작성해줘. "
+        "사실이 아닌 내용(구체적 소득액, 재직 회사명 등)은 지어내지 말고 "
+        "신청자가 채울 부분은 [대괄호]로 표시해."
+    )
+    try:
+        raw = create_structured_output(
+            system_prompt=(
+                "너는 한국 청년 정책 신청서를 돕는 어시스턴트다. "
+                "정중한 문어체로, 과장 없이 신청 사유와 활용 계획 초안을 작성한다."
+            ),
+            user_prompt=user_prompt,
+            schema_name="application_draft",
+            schema=_DRAFT_SCHEMA,
+            max_output_tokens=700,
+        )
+    except LLMUnavailable as exc:
+        print(f"[ai.apply_agent] LLM draft unavailable, skipping: {exc}")
+        return None
+    draft = {
+        DRAFT_FIELD_LABELS[key]: _clean(value)
+        for key, value in raw.items()
+        if key in DRAFT_FIELD_LABELS and _clean(value)
+    }
+    return draft or None
+
+
 def _next_action_message(eligibility: str, checklist: list[dict], channel: str) -> str:
     if eligibility == "ineligible":
         return "프로필 기준으로는 신청 조건에 맞지 않습니다. 조건이 바뀌었거나 예외가 있는지 공고문을 확인하세요."
@@ -183,6 +262,9 @@ class ApplyAgent:
         channel, url = resolve_channel(context)
         deadline, days_left = compute_deadline(context)
         checklist = build_checklist(context, notes, channel, url, deadline)
+        draft_answers = None
+        if eligibility != "ineligible":
+            draft_answers = generate_draft_answers(context, profile)
         return {
             "doc_id": context.get("doc_id") or _clean(policy.get("doc_id")),
             "source_table": context.get("source_table"),
@@ -195,6 +277,6 @@ class ApplyAgent:
             "apply_deadline": deadline,
             "days_left": days_left,
             "checklist": checklist,
-            "draft_answers": None,  # Phase 2 (LLM)
+            "draft_answers": draft_answers,
             "next_action": _next_action_message(eligibility, checklist, channel),
         }

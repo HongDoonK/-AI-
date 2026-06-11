@@ -187,8 +187,8 @@ frontend/src/
 
 | Phase | 범위 | 산출물 | 예상 규모 |
 |---|---|---|---|
-| **1 (MVP)** | 규칙 기반 ①~⑤ + applications 저장 + ApplyPanel + deep-link | `/agent/apply-plan`, 목록/상태 API, 테스트 | 백 ~400줄, 프론트 ~250줄 |
-| **2** | LLM 초안(⑥), 적격성 서버 통합(eligibilityCheck.js 이관), 마감 임박 정렬/배지 | draft_answers, needs_info UX | +200줄 |
+| **1 (MVP)** ✅ | 규칙 기반 ①~⑤ + applications 저장 + ApplyPanel + deep-link | `/agent/apply-plan`, 목록/상태 API, 테스트 | 백 ~400줄, 프론트 ~250줄 |
+| **2** ✅ | LLM 초안(⑥), 적격성 확장(취업 상태/소득), 조회 시점 만료 처리, 마감 임박 정렬/배지, 내 신청 현황 패널 | draft_answers, needs_info UX | +200줄 |
 | **3 (연구)** | 폼 프리필 보조: 신청 페이지에서 붙여넣을 답변 묶음 "복사" 버튼 → 북마클릿/확장 검토. 정부 시스템 연동 API 출현 시 재평가 | 스파이크 문서 | 별도 |
 
 Phase 1 테스트 계획 (fixture DB 기반, 기존 15개 테스트에 추가):

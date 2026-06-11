@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from typing import Any
 
 from backend.db import get_user_connection
@@ -70,6 +71,39 @@ def _connect():
     conn.execute("PRAGMA journal_mode=WAL")
     _ensure_tables(conn.cursor())
     return conn
+
+
+def days_left_of(deadline: str | None, today: date | None = None) -> int | None:
+    """ISO 마감일의 D-day. '상시'/파싱 불가면 None."""
+    if not deadline or deadline == "상시":
+        return None
+    try:
+        parsed = date.fromisoformat(str(deadline).strip())
+    except ValueError:
+        return None
+    return (parsed - (today or date.today())).days
+
+
+_EXPIRABLE_STATUSES = {"draft", "preparing", "ready"}
+
+
+def _maybe_expire(conn, data: dict[str, Any]) -> dict[str, Any]:
+    """마감이 지난 진행 전 신청 건을 조회 시점에 expired로 전이한다 (설계 §3)."""
+    days_left = days_left_of(data.get("apply_deadline"))
+    if (
+        days_left is not None
+        and days_left < 0
+        and data.get("status") in _EXPIRABLE_STATUSES
+    ):
+        conn.execute(
+            "UPDATE applications SET status = 'expired', updated_at = datetime('now', 'localtime') "
+            "WHERE application_id = ?",
+            (data["application_id"],),
+        )
+        conn.commit()
+        data["status"] = "expired"
+    data["days_left"] = days_left
+    return data
 
 
 def _row_to_application(row, items: list[dict] | None = None) -> dict[str, Any]:
@@ -183,7 +217,7 @@ def get_application(application_id: str) -> dict[str, Any] | None:
         items = [dict(item) for item in cursor.fetchall()]
         for item in items:
             item["checked"] = bool(item["checked"])
-        return _row_to_application(row, items)
+        return _maybe_expire(conn, _row_to_application(row, items))
     finally:
         conn.close()
 
@@ -209,8 +243,15 @@ def list_applications(user_id: str) -> list[dict[str, Any]]:
                 "total": stats["total"] or 0,
                 "completed": stats["done"] or 0,
             }
-            result.append(data)
-        return result
+            result.append(_maybe_expire(conn, data))
+
+        def _sort_key(item: dict[str, Any]):
+            active = 0 if item["status"] in ACTIVE_STATUSES else 1
+            days = item.get("days_left")
+            urgency = days if days is not None and days >= 0 else 10**6
+            return (active, urgency, item.get("updated_at") or "")
+
+        return sorted(result, key=_sort_key)
     finally:
         conn.close()
 
