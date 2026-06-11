@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -15,6 +16,13 @@ def project_root() -> Path:
 
 
 def find_db_path() -> Path:
+    env_path = os.getenv("YOUTH_POLICY_DB_PATH")
+    if env_path:
+        path = Path(env_path)
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"YOUTH_POLICY_DB_PATH was set, but no file exists at: {path}")
+
     root = project_root()
     candidates = [
         root / "youth_policy.db",

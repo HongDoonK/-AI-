@@ -25,3 +25,11 @@ logs/
 
 # Generated embedding cache
 data/index/
+
+# Local databases (정책 DB는 재생성 스크립트로, 사용자 DB는 런타임 생성)
+# 재생성: python -m backend.db && python -m backend.api_collector && python -m backend.preprocessing
+data/*.db
+*.db
+
+# Test fixture DB는 스크립트로 생성 (tools/make_fixture_db.py)
+tests/fixtures/

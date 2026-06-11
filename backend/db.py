@@ -17,11 +17,37 @@ _DB_CANDIDATES = [
     os.path.join(_ROOT_DIR, "data", "youth_policy.db"),
     os.path.join(_ROOT_DIR, "backend", "youth_policy.db"),
 ]
-DB_PATH = next((path for path in _DB_CANDIDATES if os.path.exists(path)), _DB_CANDIDATES[0])
+
+
+def _resolve_policy_db_path() -> str:
+    env_path = os.getenv("YOUTH_POLICY_DB_PATH")
+    if env_path:
+        return env_path
+    return next((path for path in _DB_CANDIDATES if os.path.exists(path)), _DB_CANDIDATES[0])
+
+
+def _resolve_user_db_path() -> str:
+    env_path = os.getenv("USER_DB_PATH")
+    if env_path:
+        return env_path
+    return os.path.join(_ROOT_DIR, "data", "user_data.db")
+
+
+DB_PATH = _resolve_policy_db_path()
+USER_DB_PATH = _resolve_user_db_path()
 
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_user_connection():
+    """사용자 런타임 데이터 전용 DB 연결 (정책 DB와 분리, git 비추적)."""
+    user_db_path = os.getenv("USER_DB_PATH", USER_DB_PATH)
+    os.makedirs(os.path.dirname(os.path.abspath(user_db_path)), exist_ok=True)
+    conn = sqlite3.connect(user_db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -139,6 +165,53 @@ def _ensure_search_documents_table(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)")
 
 
+def _migrate_legacy_users(policy_conn, user_conn):
+    """과거에 정책 DB(youth_policy.db) 안에 저장된 users 데이터를
+    분리된 사용자 DB로 1회 이전한다. 원본 행은 보존한다."""
+    try:
+        cursor = policy_conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+        )
+        if cursor.fetchone() is None:
+            return
+        legacy_rows = cursor.execute("SELECT * FROM users").fetchall()
+        if not legacy_rows:
+            return
+        user_cursor = user_conn.cursor()
+        _ensure_users_table(user_cursor)
+        migrated = 0
+        for row in legacy_rows:
+            data = dict(row)
+            user_cursor.execute(
+                """
+                INSERT OR IGNORE INTO users (
+                    user_id, age, gender, region_sido, region_sigungu,
+                    status, interest, employment_status, income, housing_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data.get("user_id"),
+                    data.get("age"),
+                    data.get("gender"),
+                    data.get("region_sido"),
+                    data.get("region_sigungu"),
+                    data.get("status"),
+                    data.get("interest"),
+                    data.get("employment_status"),
+                    data.get("income"),
+                    data.get("housing_status"),
+                    data.get("created_at"),
+                ),
+            )
+            migrated += user_cursor.rowcount if user_cursor.rowcount > 0 else 0
+        user_conn.commit()
+        if migrated:
+            print(f"기존 정책 DB의 users {migrated}건을 사용자 DB로 이전했습니다.")
+    except sqlite3.Error as exc:
+        print(f"users 마이그레이션 중 경고(무시하고 계속): {exc}")
+
+
 def create_tables():
     conn = get_connection()
     cursor = conn.cursor()
@@ -162,12 +235,17 @@ def create_tables():
         )
     """)
 
-    _ensure_users_table(cursor)
     _ensure_search_documents_table(cursor)
 
     conn.commit()
+
+    user_conn = get_user_connection()
+    _ensure_users_table(user_conn.cursor())
+    user_conn.commit()
+    _migrate_legacy_users(conn, user_conn)
+    user_conn.close()
     conn.close()
-    print("DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents)")
+    print("DB 테이블 생성 완료 (정책 DB: policies, policies_processed, centers, search_documents / 사용자 DB: users)")
 
 
 def get_centers_by_region(region: str) -> list:
@@ -202,7 +280,7 @@ def get_policies_by_region(sido: str, sigungu: str) -> list:
 
 def save_user(user_data: dict) -> str:
     user_id = str(uuid.uuid4())
-    conn = get_connection()
+    conn = get_user_connection()
     cursor = conn.cursor()
     _ensure_users_table(cursor)
     cursor.execute(
@@ -231,8 +309,9 @@ def save_user(user_data: dict) -> str:
 
 
 def get_user(user_id: str) -> dict | None:
-    conn = get_connection()
+    conn = get_user_connection()
     cursor = conn.cursor()
+    _ensure_users_table(cursor)
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
