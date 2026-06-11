@@ -1,11 +1,27 @@
+# Local environment files
 .env
 .env.*
 !.env.example
+!frontend/.env.example
 
+# Editor-local settings
+.vscode/
+
+# Python generated files and local virtualenvs
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.venv/
 
+# Frontend dependencies and build output
+node_modules/
 frontend/node_modules/
+dist/
 frontend/dist/
 
+# Runtime logs
+logs/
 *.log
+
+# Generated embedding cache
+data/index/
