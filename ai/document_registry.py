@@ -47,3 +47,60 @@ def find_issuer(document_label: str) -> dict | None:
         if any(keyword in text for keyword in keywords):
             return {"help_label": help_label, "help_url": help_url}
     return None
+
+
+# 도메인별 기본 제출 서류 (submit_docs가 없는 소스 테이블용 fallback)
+# 실데이터 검증: smallloan_youth/rental_houses 등은 서류 컬럼이 없어
+# 일반적인 해당 분야 필수 서류를 안내한다.
+DOMAIN_DEFAULT_DOCUMENTS: dict[str, list[str]] = {
+    "loan": [
+        "신분증",
+        "소득 증빙 서류 (소득금액증명 또는 재직증명서)",
+        "임대차계약서 사본 (전월세 상품인 경우)",
+        "주민등록등본",
+    ],
+    "rental_house": [
+        "신분증",
+        "주민등록등본",
+        "소득·자산 증빙 서류",
+        "무주택 확인 서류 (지방세 세목별 과세증명 등)",
+    ],
+    "housing_notice": [
+        "신분증",
+        "주민등록등본",
+        "소득·자산 증빙 서류",
+        "무주택 확인 서류 (지방세 세목별 과세증명 등)",
+    ],
+    "policy_housing": [
+        "신분증",
+        "주민등록등본",
+        "소득 증빙 서류",
+        "임대차계약서 사본 (해당 시)",
+    ],
+    "training": [
+        "신분증",
+        "국민내일배움카드 (HRD-Net에서 발급)",
+    ],
+    "startup": [
+        "사업계획서",
+        "신분증",
+        "사업자등록증명 (기창업자인 경우)",
+    ],
+}
+
+# 도메인별 대표 포털 (신청 URL이 없을 때 안내 링크)
+DOMAIN_FALLBACK_LINKS: dict[str, dict[str, str]] = {
+    "rental_house": {"help_label": "마이홈포털에서 공고 확인", "help_url": "https://www.myhome.go.kr/"},
+    "housing_notice": {"help_label": "마이홈포털에서 공고 확인", "help_url": "https://www.myhome.go.kr/"},
+    "loan": {"help_label": "서민금융진흥원 금융상품 안내", "help_url": "https://www.kinfa.or.kr/"},
+    "training": {"help_label": "HRD-Net에서 과정 검색", "help_url": "https://www.work24.go.kr/"},
+    "startup": {"help_label": "K-Startup 공고 확인", "help_url": "https://www.k-startup.go.kr/"},
+}
+
+
+def default_documents_for_domain(domain: str) -> list[str]:
+    return list(DOMAIN_DEFAULT_DOCUMENTS.get(str(domain or ""), []))
+
+
+def fallback_link_for_domain(domain: str) -> dict | None:
+    return DOMAIN_FALLBACK_LINKS.get(str(domain or ""))

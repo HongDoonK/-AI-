@@ -9,12 +9,17 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
 from ai.chat_text_utils import _clean, _split_items
 from ai.llm_client import LLMUnavailable, create_structured_output, llm_enabled
-from ai.document_registry import find_issuer
+from ai.document_registry import (
+    default_documents_for_domain,
+    fallback_link_for_domain,
+    find_issuer,
+)
 from ai.policy_chat_agent import PolicyChatAgent
 from ai.retriever import _extract_apply_end
 
@@ -25,6 +30,36 @@ def _to_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s,()\uAC00-\uD7A3]+|www\.[^\s,()\uAC00-\uD7A3]+")
+
+
+def _split_documents(value: Any) -> list[str]:
+    """submit_docs 텍스트를 서류 항목으로 분리한다.
+
+    실데이터에 URL이 섞여 있어 chat_text_utils._split_items(쉼표/슬래시 분리)를
+    그대로 쓰면 URL이 조각나므로, URL을 먼저 제거한 뒤 분리한다.
+    (실데이터 검증에서 발견: 주거안정장학금 submit_docs의 URL이
+    'www.kosaf.go.kr', 'ko' 조각으로 깨지던 문제)
+    """
+    text = _clean(value)
+    if not text:
+        return []
+    text = _URL_PATTERN.sub(" ", text)
+    text = re.sub(r"\(\s*\)", "", text)
+    items = []
+    for item in _split_items(text):
+        stripped = item.strip("()[]·.- ")
+        if len(stripped) < 2:
+            continue
+        if stripped.lower().startswith(("http", "www")):
+            continue
+        # 괄호 잔여물 등 한글/영문 본문이 없는 조각 제거
+        if not re.search(r"[\uAC00-\uD7A3A-Za-z]{2,}", stripped):
+            continue
+        items.append(stripped)
+    return items
 
 
 def check_eligibility(context: dict[str, Any], profile: dict[str, Any] | None) -> tuple[str, list[dict]]:
@@ -116,7 +151,13 @@ def compute_deadline(context: dict[str, Any]) -> tuple[str, int | None]:
     )
     if end is None:
         return "상시", None
-    return end.isoformat(), (end - date.today()).days
+    days_left = (end - date.today()).days
+    if days_left < 0:
+        # 추천기는 이 정책을 '신청 가능'으로 판단했는데 원문에서 과거 날짜가
+        # 나오면 (연례 사업의 지난 기수 날짜 등) 그 날짜를 신뢰하지 않는다.
+        # 과거 마감일을 그대로 쓰면 플랜이 생성 즉시 expired 처리되는 문제가 있었다.
+        return "상시", None
+    return end.isoformat(), days_left
 
 
 def build_checklist(
@@ -129,8 +170,15 @@ def build_checklist(
     items: list[dict[str, Any]] = []
     original = context.get("original") or {}
 
-    # 1) 서류 항목
-    documents = _split_items(original.get("submit_docs"))[:8]
+    # 1) 서류 항목: 원문 submit_docs → 도메인 기본 서류 → 일반 안내 순서
+    domain = _clean(context.get("domain"))
+    documents = _split_documents(original.get("submit_docs"))[:8]
+    if len(documents) < 2:
+        # 원문이 비었거나 안내문 한 줄뿐이면 도메인 기본 서류로 보강
+        for default_doc in default_documents_for_domain(domain):
+            if all(default_doc[:4] not in doc for doc in documents):
+                documents.append(default_doc)
+        documents = documents[:8]
     if not documents:
         documents = ["신분증", "공고문에서 제출 서류 확인"]
     for doc in documents:
@@ -171,7 +219,13 @@ def build_checklist(
         label = "주관 기관에 신청 방법 문의"
         if contact:
             label += f" ({contact})"
-        items.append({"kind": "action", "label": label})
+        portal = fallback_link_for_domain(domain)
+        items.append({
+            "kind": "action",
+            "label": label,
+            "help_label": portal.get("help_label") if portal else None,
+            "help_url": portal.get("help_url") if portal else None,
+        })
     items.append({"kind": "action", "label": "제출 후 접수 완료(접수번호) 확인"})
     return items
 
