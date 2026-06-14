@@ -782,6 +782,56 @@ input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb
   gap: 10px;
   margin-top: 12px;
 }
+/* ② 채팅 내 추천 카드 리스트 */
+.chat-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  margin-left: 4px;
+}
+.chat-card-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background .15s ease, border-color .15s ease;
+  width: 100%;
+}
+.chat-card-item:hover:not(:disabled) {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+}
+.chat-card-item:disabled {
+  opacity: .5;
+  cursor: default;
+}
+.chat-card-rank {
+  min-width: 20px;
+  font-weight: 700;
+  color: var(--blue, #2563eb);
+  font-size: 12px;
+}
+.chat-card-title {
+  flex: 1;
+  font-weight: 600;
+  color: #1e293b;
+  word-break: keep-all;
+}
+.chat-card-domain {
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
 .muted { color: var(--muted); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

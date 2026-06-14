@@ -112,6 +112,33 @@ class ConverseAgentTest(unittest.TestCase):
         self.assertTrue(result["documents"])
         self.assertIn("신청 페이지", result["reply"])
 
+    def test_apply_how_returns_apply_detail(self):
+        """APPLY_HOW 의도 — 신청 방법·기간·링크·문의처 반환."""
+        result = self.agent.respond(
+            message="신청 방법 알려줘",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile=None,
+        )
+        self.assertEqual(result["intent"], "apply_how")
+        self.assertIn("apply_detail", result)
+        detail = result["apply_detail"]
+        self.assertIsInstance(detail, dict, "apply_detail은 딕셔너리여야 함")
+        self.assertIn("신청 방법", result["reply"])
+
+    def test_eligibility_without_profile_returns_needs_info(self):
+        """프로필 없이 적격성 요청 시 프로필 입력 안내를 반환해야 함."""
+        result = self.agent.respond(
+            message="내가 신청 자격 되는지 확인해줘",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile=None,
+        )
+        self.assertEqual(result["intent"], "eligibility")
+        self.assertEqual(result["eligibility"], "needs_info")
+        self.assertIn("프로필", result["reply"])
+        self.assertTrue(result["eligibility_notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

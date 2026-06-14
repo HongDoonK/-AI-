@@ -6,6 +6,7 @@ const GREETING = {
   role: 'assistant',
   text: '어떤 상황인지 한 문장으로 알려 주세요. 예: "서울 26살 직장인인데 목돈 마련하고 싶어"',
   actions: [],
+  cards: [],
 };
 
 function normalizeSeedPolicy(policy = {}) {
@@ -21,16 +22,80 @@ function normalizeSeedPolicy(policy = {}) {
   };
 }
 
-// 한 대화창에서 추천 → 정책 선택 → 서류 → 지원금이 자연스럽게 이어지는 패널.
-// 자체 세션 상태(session_id)를 들고 /agent/converse만 호출한다 (App 상태와 독립).
-export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
+function buildAssistantMessage(res) {
+  return {
+    role: 'assistant',
+    text: res.reply,
+    actions: res.suggested_actions || [],
+    // 추천 턴에만 카드 목록 첨부 — 클릭 선택 가능
+    cards: res.intent === 'recommend' ? (res.cards || []) : [],
+  };
+}
+
+// ② 추천 카드 리스트 컴포넌트
+function ChatCardList({ cards, onSelect, disabled }) {
+  if (!cards || cards.length === 0) return null;
+  return (
+    <div className="chat-card-list">
+      {cards.map((card) => (
+        <button
+          key={card.doc_id || card.rank}
+          type="button"
+          className="chat-card-item"
+          onClick={() => !disabled && onSelect(card)}
+          disabled={disabled}
+        >
+          <span className="chat-card-rank">{card.rank}</span>
+          <span className="chat-card-title">{card.title}</span>
+          {card.domain && <span className="chat-card-domain">{card.domain}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// onApplyPlan: App이 주입하는 콜백 — 선택된 정책으로 /agent/apply-plan 호출
+export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, onApplyPlan }) {
   const [messages, setMessages] = useState([GREETING]);
   const [sessionId, setSessionId] = useState(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // 현재 선택된 정책 — create_apply_plan 액션칩 인터셉트에 사용
+  const [chatSelectedPolicy, setChatSelectedPolicy] = useState(null);
   const lastSeededDocId = useRef(null);
 
+  function syncSelectedPolicy(res) {
+    if (res.intent === 'recommend') {
+      setChatSelectedPolicy(null); // 새 추천 = 이전 선택 해제
+    } else if (res.selected_policy) {
+      setChatSelectedPolicy(res.selected_policy);
+    }
+  }
+
+  // 추천 카드에서 정책 직접 선택 (텍스트 입력 불필요)
+  async function selectCard(card) {
+    const title = card.title || card.policy_name || '정책';
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: `'${title}' 선택`, actions: [], cards: [] },
+    ]);
+    setLoading(true);
+    setError('');
+    try {
+      const res = await sendConverse(baseUrl, { message: '', sessionId, userId, policy: card });
+      setSessionId(res.session_id);
+      syncSelectedPolicy(res);
+      setMessages((prev) => [...prev, buildAssistantMessage(res)]);
+    } catch (err) {
+      setError('대화 처리 중 오류가 발생했습니다. 백엔드 서버가 켜져 있는지 확인해주세요.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 정책 카드에서 "이 정책 자세히 보기" 클릭으로 대화 시작할 때
   useEffect(() => {
     const docId = seededPolicy?.doc_id;
     if (!docId || lastSeededDocId.current === docId) return;
@@ -40,7 +105,10 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
     let active = true;
 
     async function seedConversation() {
-      setMessages((prev) => [...prev, { role: 'user', text: `'${policy.title}' 선택` }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', text: `'${policy.title}' 선택`, actions: [], cards: [] },
+      ]);
       setInput('');
       setLoading(true);
       setError('');
@@ -48,10 +116,8 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
         const res = await sendConverse(baseUrl, { message: '', sessionId, userId, policy });
         if (!active) return;
         setSessionId(res.session_id);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', text: res.reply, actions: res.suggested_actions || [] },
-        ]);
+        syncSelectedPolicy(res);
+        setMessages((prev) => [...prev, buildAssistantMessage(res)]);
       } catch (err) {
         if (!active) return;
         lastSeededDocId.current = null;
@@ -63,25 +129,24 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
     }
 
     seedConversation();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [baseUrl, seededPolicy, userId]);
 
   async function send(rawText) {
     const message = (rawText ?? input).trim();
     if (!message || loading) return;
-    setMessages((prev) => [...prev, { role: 'user', text: message }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: message, actions: [], cards: [] },
+    ]);
     setInput('');
     setLoading(true);
     setError('');
     try {
       const res = await sendConverse(baseUrl, { message, sessionId, userId });
       setSessionId(res.session_id);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', text: res.reply, actions: res.suggested_actions || [] },
-      ]);
+      syncSelectedPolicy(res);
+      setMessages((prev) => [...prev, buildAssistantMessage(res)]);
     } catch (err) {
       setError('대화 처리 중 오류가 발생했습니다. 백엔드 서버가 켜져 있는지 확인해주세요.');
       console.error(err);
@@ -90,12 +155,46 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
     }
   }
 
+  // ① create_apply_plan 액션칩 인터셉트 — /agent/converse 대신 onApplyPlan 콜백 호출
+  function handleChipClick(action) {
+    if ((action.action || action.intent) === 'create_apply_plan') {
+      const policy = chatSelectedPolicy;
+      if (!policy) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: '신청 플랜을 만들려면 먼저 정책을 선택해 주세요.',
+            actions: [],
+            cards: [],
+          },
+        ]);
+        return;
+      }
+      const title = policy.title || policy.policy_name || '선택한 정책';
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', text: '신청 준비 시작할게요.', actions: [], cards: [] },
+        {
+          role: 'assistant',
+          text: `'${title}' 신청 플랜을 만들고 있어요. 잠시 후 화면 왼쪽에서 확인하세요.`,
+          actions: [],
+          cards: [],
+        },
+      ]);
+      onApplyPlan?.(policy);
+      return;
+    }
+    // 그 외 액션칩 → 자연어 발화로 변환 후 전송
+    send(actionToMessage(action));
+  }
+
   function handleSubmit(event) {
     event.preventDefault();
     send();
   }
 
-  const lastActions = !loading ? messages[messages.length - 1]?.actions || [] : [];
+  const lastActions = !loading ? (messages[messages.length - 1]?.actions || []) : [];
 
   return (
     <section id="chat-flow-panel" className="panel chat-panel">
@@ -109,11 +208,16 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
 
       <div className="chat-window">
         {messages.map((message, index) => (
-          <div
-            className={`chat-bubble ${message.role === 'user' ? 'user' : 'assistant'}`}
-            key={`${message.role}-${index}`}
-          >
-            <p style={{ whiteSpace: 'pre-wrap' }}>{message.text}</p>
+          <div key={`msg-${index}`}>
+            <div className={`chat-bubble ${message.role === 'user' ? 'user' : 'assistant'}`}>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{message.text}</p>
+            </div>
+            {/* ② 추천 카드 인라인 렌더링 */}
+            <ChatCardList
+              cards={message.cards}
+              onSelect={selectCard}
+              disabled={loading}
+            />
           </div>
         ))}
         {loading && (
@@ -130,7 +234,7 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy }) {
               type="button"
               className="suggestion-chip"
               key={`${action.label}-${index}`}
-              onClick={() => send(actionToMessage(action))}
+              onClick={() => handleChipClick(action)}
             >
               {action.label}
             </button>

@@ -229,6 +229,20 @@ class ConverseAgent:
                     ]}
 
         if intent == ELIGIBILITY:
+            if profile is None:
+                return {
+                    **base,
+                    "reply": (
+                        f"'{title}' 신청 자격을 확인하려면 프로필(나이·지역·취업 상태 등)이 필요해요. "
+                        "왼쪽 '조건 저장' 폼에서 프로필을 저장하면 더 정확한 적격성 안내를 드릴게요."
+                    ),
+                    "eligibility": "needs_info",
+                    "eligibility_notes": [{"reason": "프로필 미설정 — 나이·지역·취업 상태를 저장하면 자동 비교합니다."}],
+                    "suggested_actions": [
+                        _action("필요 서류 보기", intent=DOCS),
+                        _action("얼마 받는지 보기", intent=BENEFIT),
+                    ],
+                }
             eligibility, notes = check_eligibility(context, profile)
             label = {"ok": "신청 조건에 맞아 보여요.",
                      "needs_info": "대체로 맞지만 확인이 필요한 항목이 있어요.",

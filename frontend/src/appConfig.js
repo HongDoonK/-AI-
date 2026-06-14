@@ -61,3 +61,8 @@ export function displayValue(value, fallback = '확인 필요') {
   if (value === null || value === undefined || value === '') return fallback;
   return value;
 }
+
+export function formatWon(value) {
+  if (!Number.isFinite(value)) return '0원';
+  return `${Math.round(value).toLocaleString('ko-KR')}원`;
+}

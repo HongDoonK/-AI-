@@ -74,8 +74,31 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         conn.close()
 
 
+def cleanup_old_sessions(days: int = 7) -> int:
+    """days일 이상 갱신되지 않은 세션과 관련 턴을 삭제한다. 삭제 건수를 반환."""
+    conn = _connect()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT session_id FROM conversations "
+            "WHERE updated_at < datetime('now', 'localtime', ? || ' days')",
+            (f"-{days}",),
+        )
+        old_ids = [row["session_id"] for row in cursor.fetchall()]
+        if not old_ids:
+            return 0
+        placeholders = ",".join("?" * len(old_ids))
+        conn.execute(f"DELETE FROM conversation_turns WHERE session_id IN ({placeholders})", old_ids)
+        conn.execute(f"DELETE FROM conversations WHERE session_id IN ({placeholders})", old_ids)
+        conn.commit()
+        return len(old_ids)
+    finally:
+        conn.close()
+
+
 def get_or_create_session(session_id: str | None, user_id: str | None) -> dict[str, Any]:
-    """session_id가 있고 존재하면 복원, 없으면 새로 만든다."""
+    """session_id가 있고 존재하면 복원, 없으면 새로 만든다. 호출 시 오래된 세션을 정리한다."""
+    cleanup_old_sessions(days=7)
     if session_id:
         existing = get_session(session_id)
         if existing:

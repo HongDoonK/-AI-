@@ -3,20 +3,14 @@ import {
   AlertCircle,
   AlertTriangle,
   Bell,
-  Calculator,
   CheckCircle2,
   ClipboardList,
-  ExternalLink,
   Loader2,
-  LogIn,
   Search,
-  Send,
   Sparkles,
   UserRound,
 } from 'lucide-react';
 import { buildAgentReport } from './agentPlanner.js';
-import { calculateIncomeTax } from './incomeTax.js';
-import { convertToMedianIncomePercent } from './medianIncome.js';
 import { findIneligiblePolicies } from './eligibilityCheck.js';
 import { getScoreMood } from './scoreMood.js';
 import {
@@ -29,15 +23,17 @@ import {
   NO_CONDITION_MESSAGE,
   PREP_STORAGE_KEY,
   PROFILE_STORAGE_KEY,
-  REGION_OPTIONS,
   displayValue,
-  getPossibilityClass,
+  formatWon,
   normalizeResult,
   resolveApiBaseUrl,
 } from './appConfig.js';
 import ApplyPanel from './components/ApplyPanel.jsx';
 import MyApplicationsPanel from './components/MyApplicationsPanel.jsx';
 import ChatFlowPanel from './components/ChatFlowPanel.jsx';
+import ProfileForm from './components/ProfileForm.jsx';
+import IncomeCalculator from './components/IncomeCalculator.jsx';
+import PolicyCard from './components/PolicyCard.jsx';
 import {
   createApplyPlan,
   fetchApplication,
@@ -108,237 +104,8 @@ function ValuePill({ label, value }) {
   return (
     <div className="pill">
       <span>{label}</span>
-      <strong>{displayValue(value)}</strong>
+      <strong>{value}</strong>
     </div>
-  );
-}
-
-function LoginPanel({ profile, onLogin, saving }) {
-  const [form, setForm] = useState(() => ({
-    age: profile?.age || '',
-    gender: profile?.gender || '',
-    region_sido: profile?.region_sido || '',
-    region_sigungu: profile?.region_sigungu || '',
-    employment_status: profile?.employment_status || '',
-    household_size: profile?.household_size || '1',
-    monthly_income: profile?.monthly_income || '',
-  }));
-
-  const sigunguOptions = REGION_OPTIONS[form.region_sido] || [];
-
-  const medianIncomeInfo = useMemo(() => {
-    if (!form.monthly_income) return null;
-    return convertToMedianIncomePercent(Number(form.monthly_income) * 10000, form.household_size);
-  }, [form.monthly_income, form.household_size]);
-
-  useEffect(() => {
-    if (!profile) return;
-    setForm({
-      age: profile.age || '',
-      gender: profile.gender || '',
-      region_sido: profile.region_sido || '',
-      region_sigungu: profile.region_sigungu || '',
-      employment_status: profile.employment_status || '',
-      household_size: profile.household_size || '1',
-      monthly_income: profile.monthly_income || '',
-    });
-  }, [profile]);
-
-  function updateField(name, value) {
-    setForm((prev) => {
-      const next = { ...prev, [name]: value };
-      if (name === 'region_sido') next.region_sigungu = '';
-      return next;
-    });
-  }
-
-  function submit(event) {
-    event.preventDefault();
-    onLogin({
-      age: form.age ? Number(form.age) : null,
-      gender: form.gender,
-      region_sido: form.region_sido,
-      region_sigungu: form.region_sigungu,
-      employment_status: form.employment_status,
-      household_size: form.household_size ? Number(form.household_size) : null,
-      monthly_income: form.monthly_income ? Number(form.monthly_income) : null,
-      median_income_percent: medianIncomeInfo ? Math.round(medianIncomeInfo.percent) : null,
-    });
-  }
-
-  return (
-    <form className="panel login-panel" onSubmit={submit}>
-      <p className="card-eyebrow">사용자 프로필</p>
-      <h2>조건 저장</h2>
-      <div className="form-grid">
-        <label>
-          나이
-          <input value={form.age} onChange={(e) => updateField('age', e.target.value)} type="number" min="14" max="49" placeholder="24" />
-        </label>
-        <label>
-          성별
-          <select value={form.gender} onChange={(e) => updateField('gender', e.target.value)}>
-            <option value="">선택 안 함</option>
-            <option value="남성">남성</option>
-            <option value="여성">여성</option>
-          </select>
-        </label>
-        <label>
-          시도
-          <select value={form.region_sido} onChange={(e) => updateField('region_sido', e.target.value)}>
-            <option value="">선택 안 함</option>
-            {Object.keys(REGION_OPTIONS).map((sido) => (
-              <option key={sido} value={sido}>{sido}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          시군구
-          <select value={form.region_sigungu} onChange={(e) => updateField('region_sigungu', e.target.value)} disabled={!form.region_sido}>
-            <option value="">선택 안 함</option>
-            {sigunguOptions.map((sigungu) => (
-              <option key={sigungu} value={sigungu}>{sigungu}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          취업 상태
-          <select value={form.employment_status} onChange={(e) => updateField('employment_status', e.target.value)}>
-            <option value="">선택 안 함</option>
-            <option value="미취업">미취업</option>
-            <option value="재직">재직</option>
-            <option value="창업">창업</option>
-            <option value="자영업">자영업</option>
-            <option value="프리랜서">프리랜서</option>
-          </select>
-        </label>
-        <label>
-          가구원 수 (본인 포함)
-          <select value={form.household_size} onChange={(e) => updateField('household_size', e.target.value)}>
-            {[1, 2, 3, 4, 5, 6, 7].map((size) => (
-              <option key={size} value={size}>{size}인 가구</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          월 소득 (만원)
-          <input
-            value={form.monthly_income}
-            onChange={(e) => updateField('monthly_income', e.target.value)}
-            type="number"
-            min="0"
-            step="10"
-            placeholder="예: 250 (250만 원)"
-          />
-        </label>
-      </div>
-      {medianIncomeInfo && (
-        <p className="hint">
-          2026년 {medianIncomeInfo.householdSize}인 가구 기준 중위소득({formatWon(medianIncomeInfo.medianIncome)}) 대비
-          {' '}<strong>약 {Math.round(medianIncomeInfo.percent)}%</strong>로 환산되어 프로필에 함께 저장됩니다.
-        </p>
-      )}
-      <button className="primary-button full-button" type="submit" disabled={saving}>
-        {saving ? <><Loader2 className="spin" size={18} /> 저장 중</> : <><LogIn size={18} /> 프로필 저장</>}
-      </button>
-      {profile?.user_id && <p className="hint">저장 시점: {displayValue(profile.created_at)} · 사용자 ID: {profile.user_id.slice(0, 8)}</p>}
-    </form>
-  );
-}
-
-function formatWon(value) {
-  if (!Number.isFinite(value)) return '0원';
-  return `${Math.round(value).toLocaleString('ko-KR')}원`;
-}
-
-function IncomeTaxCalculator() {
-  const [form, setForm] = useState({
-    annualSalary: '',
-    monthlyNonTaxable: '200000',
-    dependents: '1',
-  });
-
-  function updateField(name, value) {
-    setForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  const result = useMemo(() => {
-    const annualSalaryManwon = Number(form.annualSalary);
-    if (!annualSalaryManwon || annualSalaryManwon <= 0) return null;
-    return calculateIncomeTax(annualSalaryManwon * 10000, {
-      monthlyNonTaxable: Number(form.monthlyNonTaxable) || 0,
-      dependents: Number(form.dependents) || 1,
-    });
-  }, [form]);
-
-  return (
-    <section className="panel income-tax-panel">
-      <p className="card-eyebrow">내 근로소득 계산</p>
-      <h2><Calculator size={19} /> 연봉 실수령액 계산기</h2>
-      <p className="hint">
-        근로소득공제·종합소득세율·근로소득세액공제·4대보험요율을 반영한 근사 계산이며,
-        실제 원천징수세액(간이세액표)과는 차이가 있을 수 있습니다.
-      </p>
-      <div className="form-grid">
-        <label>
-          연봉 (세전, 만원)
-          <input
-            value={form.annualSalary}
-            onChange={(e) => updateField('annualSalary', e.target.value)}
-            type="number"
-            min="0"
-            step="10"
-            placeholder="예: 3600 (3,600만 원)"
-          />
-        </label>
-        <label>
-          월 비과세액 (원, 식대 등)
-          <input
-            value={form.monthlyNonTaxable}
-            onChange={(e) => updateField('monthlyNonTaxable', e.target.value)}
-            type="number"
-            min="0"
-            step="10000"
-            placeholder="예: 200000"
-          />
-        </label>
-        <label>
-          부양가족 수 (본인 포함)
-          <input
-            value={form.dependents}
-            onChange={(e) => updateField('dependents', e.target.value)}
-            type="number"
-            min="1"
-            max="11"
-            placeholder="1"
-          />
-        </label>
-      </div>
-
-      {result ? (
-        <>
-          <div className="pill-wrap">
-            <ValuePill label="월 예상 실수령액" value={formatWon(result.monthly.netIncome)} />
-            <ValuePill label="연 예상 실수령액" value={formatWon(result.annual.netIncome)} />
-            <ValuePill label="월 공제 합계" value={formatWon(result.monthly.deductionTotal)} />
-            <ValuePill label="연 공제 합계" value={formatWon(result.annual.deductionTotal)} />
-          </div>
-          <div className="income-tax-detail">
-            <h4>월 공제 내역 (예상)</h4>
-            <ul className="check-list">
-              <li><span>국민연금</span><strong>{formatWon(result.monthly.pension)}</strong></li>
-              <li><span>건강보험</span><strong>{formatWon(result.monthly.health)}</strong></li>
-              <li><span>장기요양보험</span><strong>{formatWon(result.monthly.longTermCare)}</strong></li>
-              <li><span>고용보험</span><strong>{formatWon(result.monthly.employment)}</strong></li>
-              <li><span>근로소득세</span><strong>{formatWon(result.monthly.incomeTax)}</strong></li>
-              <li><span>지방소득세</span><strong>{formatWon(result.monthly.localIncomeTax)}</strong></li>
-            </ul>
-          </div>
-        </>
-      ) : (
-        <p className="muted">연봉을 입력하면 4대보험과 근로소득세를 반영한 예상 실수령액을 계산해드립니다.</p>
-      )}
-    </section>
   );
 }
 
@@ -430,11 +197,15 @@ function EligibilityGapPanel({ recommendations, profile }) {
   );
 }
 
+function policyKey(policy) {
+  return policy?.doc_id || `${policy?.source_table || 'policy'}:${policy?.source_id || policy?.policy_name || 'unknown'}`;
+}
+
 function PreparationBoard({ policy, checkedItems, onToggle }) {
-  const policyId = policyKey(policy);
   const items = useMemo(() => buildPreparationItems(policy), [policy]);
   const stats = getCompletionStats(items, checkedItems);
   const done = stats.total > 0 && stats.completed === stats.total;
+  const keyForPolicy = policyKey(policy);
 
   return (
     <section className="panel prep-board">
@@ -457,7 +228,7 @@ function PreparationBoard({ policy, checkedItems, onToggle }) {
                 <input
                   type="checkbox"
                   checked={checked}
-                  onChange={(event) => onToggle(policyId, item, event.target.checked)}
+                  onChange={(event) => onToggle(keyForPolicy, item, event.target.checked)}
                 />
                 <span className="prep-item-content">
                   <span className="prep-item-text">{item}</span>
@@ -475,85 +246,6 @@ function PreparationBoard({ policy, checkedItems, onToggle }) {
       {done && <p className="prep-complete"><CheckCircle2 size={16} /> 준비 항목을 모두 체크했습니다.</p>}
     </section>
   );
-}
-
-function PolicyCard({ policy, index, onChat, onPrepare, onApply }) {
-  const checklist = Array.isArray(policy.checklist) ? policy.checklist : [];
-  const url = policy.application_url || policy.url || policy.ref_url;
-  const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
-  const hasEvidence =
-    badges.length > 0 ||
-    policy.region_match ||
-    policy.domain_label ||
-    policy.source_label ||
-    policy.match_score_label;
-  const supportSummary = policy.support_summary || policy.support_content;
-  const scoreMood = getScoreMood(policy);
-
-  return (
-    <article className="policy-card">
-      <div className="policy-head">
-        <div className="policy-title-block">
-          <p className="card-eyebrow">추천 정책 {index + 1}</p>
-          <h3>{displayValue(policy.policy_name, '정책명 확인 필요')}</h3>
-          <div className="policy-rank-row">
-            <span className={getPossibilityClass(policy.apply_possibility)}>{displayValue(policy.apply_possibility)}</span>
-          </div>
-        </div>
-      </div>
-      <div className="policy-meta">
-        <span>신청 기간: {displayValue(policy.application_period)}</span>
-      </div>
-      {hasEvidence && (
-        <section className="evidence-box">
-          <div className="evidence-head">
-            <strong>추천 근거</strong>
-            {policy.match_score_label && (
-              <div className="score-summary">
-                {scoreMood && (
-                  <span className={scoreMood.className} aria-label={scoreMood.label} title={scoreMood.label}>
-                    {scoreMood.emoji}
-                  </span>
-                )}
-                <span>{displayValue(policy.match_method, '검색 점수')} {policy.match_score_label}</span>
-              </div>
-            )}
-          </div>
-          <div className="evidence-grid">
-            {badges.map((badge, idx) => (
-              <span key={`${badge}-${idx}`}>{badge}</span>
-            ))}
-          </div>
-        </section>
-      )}
-      {supportSummary && (
-        <section className="mini-section">
-          <h4>지원 내용 요약</h4>
-          <p>{supportSummary}</p>
-        </section>
-      )}
-      {checklist.length > 0 && (
-        <section className="mini-section checklist-block">
-          <h4>신청 체크리스트</h4>
-          <ul className="check-list">
-            {checklist.map((item, idx) => (
-              <li key={`${item}-${idx}`}><CheckCircle2 size={16} /><span>{item}</span></li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <div className="policy-actions">
-        <button className="primary-button" type="button" onClick={() => onApply(policy)}><Send size={16} /> 신청 준비하기</button>
-        <button className="ghost-button" type="button" onClick={() => onPrepare(policy)}><ClipboardList size={16} /> 준비 체크 시작</button>
-        <button className="ghost-button" type="button" onClick={() => onChat(policy)}><Search size={16} /> 이 정책 자세히 보기</button>
-        {url && <a className="link-button" href={url} target="_blank" rel="noreferrer">신청/참고 링크 열기 <ExternalLink size={15} /></a>}
-      </div>
-    </article>
-  );
-}
-
-function policyKey(policy) {
-  return policy?.doc_id || `${policy?.source_table || 'policy'}:${policy?.source_id || policy?.policy_name || 'unknown'}`;
 }
 
 export default function App() {
@@ -598,8 +290,6 @@ export default function App() {
         body: JSON.stringify(profileInput),
       });
       if (!response.ok) throw new Error(`사용자 저장 실패: ${response.status}`);
-      // 백엔드 사용자 모델에는 가구원수/월소득/중위소득 비율 항목이 없어 응답에 포함되지 않으므로,
-      // 입력값을 그대로 합쳐서 프런트에서 함께 보관한다.
       const savedProfile = sanitizeProfile({
         ...(await response.json()),
         household_size: profileInput.household_size,
@@ -695,6 +385,7 @@ export default function App() {
     }
   }
 
+  // ① ChatFlowPanel의 onApplyPlan 콜백 — 신청 플랜 생성 후 해당 패널로 스크롤
   async function startApplyPlan(policy) {
     setApplyLoading(true);
     setApplyError('');
@@ -702,6 +393,12 @@ export default function App() {
       const plan = await createApplyPlan(API_BASE_URL, policy, profile?.user_id);
       setApplyPlan(plan);
       refreshMyApplications(profile?.user_id);
+      window.requestAnimationFrame(() => {
+        document.getElementById('apply-plan-anchor')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      });
     } catch (error) {
       setApplyPlan(null);
       setApplyError('신청 플랜을 만들지 못했습니다. 백엔드 서버를 확인해주세요.');
@@ -740,8 +437,8 @@ export default function App() {
     setSelectedPrepPolicy(policy);
   }
 
-  function togglePreparation(policyId, item, checked) {
-    setCheckedPrepByPolicy((prev) => togglePreparationItem(prev, policyId, item, checked));
+  function togglePreparation(pId, item, checked) {
+    setCheckedPrepByPolicy((prev) => togglePreparationItem(prev, pId, item, checked));
   }
 
   return (
@@ -771,8 +468,8 @@ export default function App() {
 
       <section className="result-grid">
         <aside className="left-column">
-          <LoginPanel profile={profile} onLogin={handleLogin} saving={savingProfile} />
-          <IncomeTaxCalculator />
+          <ProfileForm profile={profile} onLogin={handleLogin} saving={savingProfile} />
+          <IncomeCalculator />
           <ApplicationAgentPanel recommendations={data.recommendations} />
           <EligibilityGapPanel recommendations={data.recommendations} profile={profile} />
           <MyApplicationsPanel
@@ -780,15 +477,18 @@ export default function App() {
             loading={myApplicationsLoading}
             onOpen={openMyApplication}
           />
-          {(applyPlan || applyLoading) && (
-            <ApplyPanel
-              plan={applyPlan}
-              loading={applyLoading}
-              error={applyError}
-              onToggleItem={handleApplyItemToggle}
-              onStatusChange={handleApplyStatusChange}
-            />
-          )}
+          {/* ① 신청 플랜 패널 — ChatFlowPanel의 onApplyPlan이 여기로 스크롤 */}
+          <div id="apply-plan-anchor">
+            {(applyPlan || applyLoading) && (
+              <ApplyPanel
+                plan={applyPlan}
+                loading={applyLoading}
+                error={applyError}
+                onToggleItem={handleApplyItemToggle}
+                onStatusChange={handleApplyStatusChange}
+              />
+            )}
+          </div>
           {selectedPrepPolicy && (
             <PreparationBoard
               policy={selectedPrepPolicy}
@@ -799,7 +499,13 @@ export default function App() {
         </aside>
 
         <section className="right-column">
-          <ChatFlowPanel baseUrl={API_BASE_URL} userId={profile?.user_id} seededPolicy={seedPolicy} />
+          {/* ① onApplyPlan 주입 — 채팅에서 "신청 준비 시작" 클릭 시 startApplyPlan 호출 */}
+          <ChatFlowPanel
+            baseUrl={API_BASE_URL}
+            userId={profile?.user_id}
+            seededPolicy={seedPolicy}
+            onApplyPlan={startApplyPlan}
+          />
           {result ? (
             <>
               <div className="section-title">
