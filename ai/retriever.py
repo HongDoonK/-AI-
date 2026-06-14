@@ -20,12 +20,26 @@ INTEREST_TERMS = {
     "취업": ["취업", "구직", "일자리", "면접", "채용", "자격증"],
     "창업": ["창업", "사업", "스타트업", "창업자", "예비창업"],
     "교육": ["교육", "훈련", "강의", "학습", "장학", "학비"],
+    "문화": ["문화", "문화생활", "공연", "전시", "예술", "관람", "체험"],
     "복지": ["복지", "상담", "건강", "문화", "생활"],
     "금융": ["금융", "대출", "저축", "자산", "소득", "지원금", "목돈", "적금", "예금", "통장", "재테크", "투자", "주식"],
 }
 
-ASSET_BUILDING_TERMS = ["목돈", "저축", "적금", "자산", "자산형성", "통장", "재테크", "매칭", "금융교육", "재무상담"]
+ASSET_REQUEST_TERMS = ["목돈", "저축", "적금", "자산", "자산형성", "통장", "매칭"]
+ASSET_ACCOUNT_TERMS = ["저축계좌", "적금", "예금", "통장", "자산형성", "매칭"]
+ASSET_EDUCATION_TERMS = ["재테크", "금융교육", "재무상담", "상담", "교육"]
+ASSET_BUILDING_TERMS = ASSET_REQUEST_TERMS + ASSET_EDUCATION_TERMS
 LOAN_TERMS = ["대출", "융자", "보증", "빌리"]
+SUPPORT_TERMS = ["지원", "대출", "보증", "급여", "임대료", "보조", "바우처", "수당", "비용"]
+CULTURE_CORE_TERMS = [
+    "문화생활", "공연", "전시", "예술", "관람", "관람비", "문화비",
+    "영화", "연극", "음악", "축제", "관광", "여행", "콘텐츠",
+]
+CULTURE_CORE_PATTERNS = [
+    r"문화\s*행사", r"문화예술", r"문화생활", r"(?<!전)공연", r"전시", r"예술", r"관람", r"관람비",
+    r"문화비", r"영화", r"연극", r"음악", r"축제", r"관광", r"여행", r"콘텐츠",
+]
+CULTURE_EXCLUSION_TERMS = ["봉사", "병역", "건강", "트라우마", "상담", "의료", "취업", "구직", "직업"]
 
 ALWAYS_OPEN_TERMS = ["상시", "수시", "연중", "예산 소진", "별도 문의", "문의", "미정"]
 
@@ -35,6 +49,7 @@ INTEREST_DOMAINS = {
     "교육": ["policy_training", "training"],
     "취업": ["policy_job", "training"],
     "창업": ["policy_startup", "startup"],
+    "문화": ["policy"],
     "복지": ["policy", "policy_finance"],
 }
 
@@ -80,6 +95,14 @@ def _contains(series: pd.Series, value: str | None) -> pd.Series:
     if not value:
         return pd.Series([True] * len(series), index=series.index)
     return series.str.contains(re.escape(str(value)), case=False, na=False)
+
+
+def _has_culture_core_signal(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in CULTURE_CORE_PATTERNS)
+
+
+def _has_culture_exclusion_signal(text: str) -> bool:
+    return any(term in text for term in CULTURE_EXCLUSION_TERMS)
 
 
 def _normalize_region(value: str | None) -> str:
@@ -431,12 +454,98 @@ def _faiss_rank(
         raise RuntimeError("FAISS search returned no rows after filtering.")
     ranked = pd.concat(rows, ignore_index=True)
     ranked["match_method"] = "FAISS 임베딩"
-    return ranked
+    return _with_task_priority(ranked, user_input, condition)
+
+
+def _row_category_text(row: pd.Series) -> str:
+    return " ".join(
+        str(row.get(col) or "")
+        for col in ["domain", "source_table", "category_main", "category_sub", "keyword", "policy_name", "title"]
+    )
+
+
+def _task_priority_for_row(user_input: str, condition: dict[str, Any], row: pd.Series, searchable_text: str) -> int:
+    input_text = user_input or ""
+    interest = condition.get("interest")
+    category_text = _row_category_text(row)
+    combined_text = f"{searchable_text} {category_text}"
+
+    is_loan_domain = str(row.get("domain") or "") == "loan" or str(row.get("source_table") or "") == "smallloan_youth"
+    has_loan_signal = is_loan_domain or any(term in combined_text for term in LOAN_TERMS)
+    has_asset_signal = any(term in combined_text for term in ASSET_BUILDING_TERMS)
+    has_asset_account_signal = any(term in combined_text for term in ASSET_ACCOUNT_TERMS)
+    has_asset_education_signal = any(term in combined_text for term in ASSET_EDUCATION_TERMS)
+    loan_requested = any(term in input_text for term in LOAN_TERMS)
+    asset_building_requested = any(term in input_text for term in ASSET_REQUEST_TERMS)
+
+    priority = 0
+    interest_terms = INTEREST_TERMS.get(interest, [])
+    if interest == "문화":
+        has_culture_core_signal = _has_culture_core_signal(combined_text)
+        has_culture_signal = any(term in combined_text for term in INTEREST_TERMS["문화"])
+        has_culture_exclusion_signal = _has_culture_exclusion_signal(combined_text)
+        if has_culture_core_signal:
+            priority = max(priority, 4)
+        elif has_culture_signal and not has_culture_exclusion_signal:
+            priority = max(priority, 2)
+    elif interest_terms and any(term in combined_text for term in interest_terms):
+        priority = max(priority, 2)
+
+    if interest == "금융":
+        if loan_requested and has_loan_signal:
+            priority = max(priority, 4)
+        elif asset_building_requested:
+            if has_asset_account_signal:
+                priority = max(priority, 3 if has_loan_signal else 4)
+            elif has_asset_education_signal or has_asset_signal:
+                priority = max(priority, 2)
+
+    housing_requested = interest == "주거" or condition.get("housing_status")
+    if housing_requested:
+        housing_terms = ["월세", "전세", "주거", "주택", "임대", "보증금"]
+        rent_terms = ["월세", "전월세", "임대료", "보증금", "주택임차"]
+        lease_terms = ["전세", "전월세", "전세금", "전세자금", "보증금", "주택임차"]
+        has_housing_signal = any(term in combined_text for term in housing_terms)
+        has_support_signal = any(term in combined_text for term in SUPPORT_TERMS)
+        if condition.get("housing_status") == "월세":
+            has_rent_signal = any(term in combined_text for term in rent_terms)
+            if has_rent_signal and has_support_signal:
+                priority = max(priority, 4)
+            elif has_rent_signal:
+                priority = max(priority, 3)
+        elif condition.get("housing_status") == "전세":
+            has_lease_signal = any(term in combined_text for term in lease_terms)
+            if has_lease_signal and has_support_signal:
+                priority = max(priority, 4)
+            elif has_lease_signal:
+                priority = max(priority, 3)
+        elif has_housing_signal:
+            priority = max(priority, 2)
+
+    return priority
+
+
+def _with_task_priority(ranked: pd.DataFrame, user_input: str, condition: dict[str, Any]) -> pd.DataFrame:
+    if ranked.empty:
+        return ranked
+    prioritized = ranked.copy()
+    text = _text_series(
+        prioritized,
+        [
+            "search_text", "title", "summary", "region_name", "region_sido", "region_sigungu", "target", "domain", "source_table",
+            "policy_name", "description", "keyword", "category_main", "category_sub", "support_content",
+        ],
+    )
+    prioritized["_task_priority"] = [
+        _task_priority_for_row(user_input, condition, prioritized.loc[idx], value)
+        for idx, value in text.items()
+    ]
+    return prioritized
 
 
 def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
     input_text = user_input or ""
-    asset_building_requested = any(term in input_text for term in ASSET_BUILDING_TERMS)
+    asset_building_requested = any(term in input_text for term in ASSET_REQUEST_TERMS)
     loan_requested = any(term in input_text for term in LOAN_TERMS)
     query_terms = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", user_input or ""))
     for key in [
@@ -470,20 +579,21 @@ def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.Dat
 
     ranked = candidates.copy()
     scores = []
+    task_priorities = []
     interest = condition.get("interest")
     interest_terms = INTEREST_TERMS.get(interest, [])
 
     for idx, value in text.items():
         haystack = value.lower()
         row = candidates.loc[idx]
-        category_text = " ".join(
-            str(row.get(col) or "")
-            for col in ["domain", "source_table", "category_main", "category_sub", "keyword", "policy_name", "title"]
-        )
+        category_text = _row_category_text(row)
         combined_text = f"{haystack} {category_text}"
         is_loan_domain = str(row.get("domain") or "") == "loan" or str(row.get("source_table") or "") == "smallloan_youth"
         has_loan_signal = is_loan_domain or any(term in combined_text for term in LOAN_TERMS)
         has_asset_signal = any(term in combined_text for term in ASSET_BUILDING_TERMS)
+        has_asset_account_signal = any(term in combined_text for term in ASSET_ACCOUNT_TERMS)
+        has_asset_education_signal = any(term in combined_text for term in ASSET_EDUCATION_TERMS)
+        task_priority = _task_priority_for_row(user_input, condition, row, value)
 
         score = 0.0
         for term in query_terms:
@@ -502,10 +612,27 @@ def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.Dat
             if loan_requested:
                 score += 14.0 if has_loan_signal else -2.0
             elif asset_building_requested:
-                if has_asset_signal:
-                    score += 10.0
+                if has_asset_account_signal:
+                    score += 14.0
+                elif has_asset_education_signal:
+                    score += 4.0
+                elif has_asset_signal:
+                    score += 6.0
                 if has_loan_signal:
                     score -= 8.0
+
+        if condition.get("interest") == "문화":
+            has_culture_signal = any(term in combined_text for term in INTEREST_TERMS["문화"])
+            has_culture_core_signal = _has_culture_core_signal(combined_text)
+            has_culture_exclusion_signal = _has_culture_exclusion_signal(combined_text)
+            if has_culture_core_signal:
+                score += 14.0
+            elif has_culture_signal and not has_culture_exclusion_signal:
+                score += 2.0
+            elif has_culture_exclusion_signal:
+                score -= 8.0
+            else:
+                score -= 6.0
 
         if condition.get("status") and condition["status"] in haystack:
             score += 3.0
@@ -516,30 +643,33 @@ def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.Dat
         if housing_requested:
             housing_terms = ["월세", "전세", "주거", "주택", "임대", "보증금"]
             rent_terms = ["월세", "전월세", "임대료", "보증금", "주택임차"]
-            has_housing_signal = any(term in category_text for term in housing_terms)
+            has_housing_signal = any(term in combined_text for term in housing_terms)
+            has_support_signal = any(term in combined_text for term in SUPPORT_TERMS)
             if has_housing_signal:
                 score += 6.0
             if "창업" in category_text and not has_housing_signal:
                 score -= 6.0
             if condition.get("housing_status") == "월세":
                 has_rent_signal = any(term in haystack or term in category_text for term in rent_terms)
-                score += 8.0 if has_rent_signal else -10.0
+                score += 14.0 if has_rent_signal and has_support_signal else 8.0 if has_rent_signal else -10.0
             elif condition.get("housing_status") == "전세":
                 lease_terms = ["전세", "전월세", "전세금", "전세자금", "보증금", "주택임차"]
                 has_lease_signal = any(term in haystack or term in category_text for term in lease_terms)
-                score += 8.0 if has_lease_signal else -10.0
+                score += 14.0 if has_lease_signal and has_support_signal else 8.0 if has_lease_signal else -10.0
 
         if (condition.get("region") or condition.get("region_sido") or condition.get("region_sigungu")) and _condition_region_mask(pd.DataFrame([row]), condition).iloc[0]:
             score += 2.0
         scores.append(score)
+        task_priorities.append(task_priority)
 
     ranked["score"] = scores
+    ranked["_task_priority"] = task_priorities
     ranked["match_method"] = "키워드/필터"
     ranked["_region_priority"] = _condition_region_priority(ranked, condition)
     sort_id = "doc_id" if "doc_id" in ranked.columns else "policy_id"
     return ranked.sort_values(
-        ["_region_priority", "score", sort_id],
-        ascending=[False, False, True],
+        ["_task_priority", "_region_priority", "score", sort_id],
+        ascending=[False, False, False, True],
     ).head(top_k).reset_index(drop=True)
 
 
@@ -551,8 +681,13 @@ def _apply_region_order(ranked: pd.DataFrame, condition: dict[str, Any], top_k: 
 
     ordered = ranked.copy()
     ordered["_region_priority"] = _condition_region_priority(ordered, condition)
-    sort_columns = ["_region_priority"]
-    ascending = [False]
+    sort_columns = []
+    ascending = []
+    if "_task_priority" in ordered.columns:
+        sort_columns.append("_task_priority")
+        ascending.append(False)
+    sort_columns.append("_region_priority")
+    ascending.append(False)
     if "score" in ordered.columns:
         sort_columns.append("score")
         ascending.append(False)
@@ -637,4 +772,4 @@ def retrieve_top_k(user_input: str, user_condition: dict, df: pd.DataFrame, top_
         else:
             ranked = _rank_with_fallback(user_input, user_condition, corpus, candidates, top_k)
 
-    return ranked.drop(columns=["_source_index", "_region_priority"], errors="ignore").head(top_k).to_dict("records")
+    return ranked.drop(columns=["_source_index", "_region_priority", "_task_priority"], errors="ignore").head(top_k).to_dict("records")

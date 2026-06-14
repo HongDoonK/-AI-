@@ -34,8 +34,9 @@ INTEREST_KEYWORDS = {
     "취업": ["취업", "구직", "면접", "일자리", "채용", "자격증"],
     "창업": ["창업", "사업", "스타트업"],
     "교육": ["교육", "훈련", "강의", "학습", "장학", "학비"],
-    "복지": ["복지", "건강", "상담", "문화", "생활"],
     "금융": ["금융", "대출", "저축", "자산", "소득", "지원금", "목돈", "적금", "예금", "통장", "재테크", "투자", "주식"],
+    "문화": ["문화", "문화생활", "공연", "전시", "예술", "관람"],
+    "복지": ["복지", "건강", "상담", "생활지원"],
 }
 
 HOUSING_KEYWORDS = ["월세", "전세", "자가", "임대", "무주택", "기숙사"]
@@ -183,7 +184,7 @@ def extract_user_condition_with_llm(user_input: str) -> dict:
         "Extract region_sido and region_sigungu separately when available, for example 경기 오산시. "
         "Keep school/life status and employment status separate: status can be 대학생, 졸업생, 청년, 군인, "
         "while employment_status should only be 미취업, 재직, 창업, 자영업, 프리랜서, or null. "
-        "Use broad Korean labels such as 서울, 경기, 오산시, 대학생, 미취업, 재직, 취업, 주거, 창업, 교육, 복지, 금융, 월세."
+        "Use broad Korean labels such as 서울, 경기, 오산시, 대학생, 미취업, 재직, 취업, 주거, 창업, 교육, 문화, 복지, 금융, 월세."
     )
     user_prompt = f"사용자 입력:\n{user_input}"
     result = create_structured_output(

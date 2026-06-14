@@ -21,6 +21,14 @@ class ConditionExtractorTest(unittest.TestCase):
         self.assertEqual(condition.get("employment_status"), "재직")
         self.assertEqual(condition.get("interest"), "금융")
 
+    def test_culture_life_is_culture_interest_not_generic_welfare(self):
+        condition = extract_user_condition("서울 사는 24세 청년인데 문화생활 지원 정책 없나?")
+        self.assertEqual(condition.get("interest"), "문화")
+
+    def test_living_expense_loan_is_finance_interest_not_welfare(self):
+        condition = extract_user_condition("서울 사는 24세 청년인데 생활비 대출 필요해")
+        self.assertEqual(condition.get("interest"), "금융")
+
     def test_has_condition_signal_true_for_specific_input(self):
         self.assertTrue(has_condition_signal("부산 사는 30세 예비창업자입니다"))
 
