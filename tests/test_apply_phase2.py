@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.util_fixture import set_test_env
 
@@ -27,6 +28,39 @@ class DraftFallbackTest(unittest.TestCase):
             {"age": 24, "region_sido": "서울"},
         )
         self.assertIsNone(plan["draft_answers"])
+
+    def test_draft_is_none_on_non_llmunavailable_error(self):
+        """잘못된 키 등으로 인한 비-LLMUnavailable 예외(401/레이트리밋 등)는
+        전파되지 않고 None으로 흡수돼야 한다."""
+        from ai import apply_agent
+
+        with mock.patch.object(apply_agent, "llm_enabled", return_value=True), \
+            mock.patch.object(
+                apply_agent,
+                "create_structured_output",
+                side_effect=RuntimeError("401 Unauthorized: invalid api key"),
+            ):
+            self.assertIsNone(
+                apply_agent.generate_draft_answers({"title": "테스트 정책"}, {"age": 24})
+            )
+
+    def test_build_plan_survives_llm_auth_error(self):
+        """LLM 호출이 인증 오류로 터져도 build_plan은 draft_answers=None으로 정상 반환."""
+        from ai.apply_agent import ApplyAgent
+        from ai import apply_agent
+
+        with mock.patch.object(apply_agent, "llm_enabled", return_value=True), \
+            mock.patch.object(
+                apply_agent,
+                "create_structured_output",
+                side_effect=RuntimeError("401 Unauthorized: invalid api key"),
+            ):
+            plan = ApplyAgent().build_plan(
+                {"doc_id": "policies_processed:P001", "source_table": "policies_processed", "source_id": "P001"},
+                {"age": 24, "region_sido": "서울"},
+            )
+        self.assertIsNone(plan["draft_answers"])
+        self.assertIn(plan["eligibility"], {"ok", "needs_info", "ineligible"})
 
 
 class EligibilityPhase2Test(unittest.TestCase):

@@ -35,6 +35,22 @@ class SplitDocumentsTest(unittest.TestCase):
 
 
 class DomainDefaultDocumentsTest(unittest.TestCase):
+    def test_non_http_application_site_is_treated_as_online(self):
+        # 실데이터: smallloan_youth의 신청 경로가 "www.kosaf.go.kr"처럼
+        # http scheme 없이 들어와도 온라인 신청 채널로 안내해야 한다.
+        from ai.apply_agent import resolve_channel
+
+        channel, url = resolve_channel({
+            "url": "재단 홈페이지(www.kosaf.go.kr) > 학자금대출 > 학자금대출 신청",
+            "original": {
+                "jnMthd": "한국장학재단 홈페이지(www.kosaf.go.kr) 또는 모바일 앱에서 신청",
+                "rltSite": "재단 홈페이지(www.kosaf.go.kr) > 학자금대출 > 학자금대출 신청",
+            },
+        })
+        self.assertEqual(channel, "online")
+        self.assertTrue(url.startswith("https://"))
+        self.assertIn("kosaf.go.kr", url)
+
     def test_loan_without_submit_docs_gets_loan_documents(self):
         # 실데이터: smallloan_youth(월세자금보증 등)는 submit_docs 컬럼이 없음
         from ai.apply_agent import build_checklist
@@ -44,6 +60,38 @@ class DomainDefaultDocumentsTest(unittest.TestCase):
         doc_labels = [i["label"] for i in items if i["kind"] == "document"]
         self.assertTrue(any("소득 증빙" in label for label in doc_labels))
         self.assertNotIn("공고문에서 제출 서류 확인", doc_labels)
+
+    def test_student_loan_uses_student_documents_not_rental_documents(self):
+        from ai.apply_agent import build_checklist
+
+        context = {
+            "domain": "loan",
+            "source_table": "smallloan_youth",
+            "title": "취업 후 상환 학자금대출(등록금)",
+            "summary": "한국장학재단 학자금대출",
+            "original": {},
+            "target": "국내 고등교육기관 학부생 및 대학원생",
+        }
+        items = build_checklist(context, [], "online", "https://www.kosaf.go.kr/", "상시")
+        doc_labels = [i["label"] for i in items if i["kind"] == "document"]
+        self.assertFalse(any("임대차계약서" in label for label in doc_labels))
+        self.assertTrue(any("재학" in label or "학자금" in label for label in doc_labels))
+
+    def test_vague_finance_submit_docs_are_supplemented(self):
+        # 실데이터: 청년내일저축계좌처럼 submit_docs가 "첨부파일 참고" 수준이면
+        # 사용자가 바로 준비할 수 있는 기본 금융/자산형성 서류를 보강한다.
+        from ai.apply_agent import build_checklist
+
+        context = {
+            "domain": "policy_finance",
+            "title": "청년내일저축계좌",
+            "original": {"submit_docs": "※첨부파일 참고"},
+            "target": "근로 청년",
+        }
+        items = build_checklist(context, [], "online", "https://example.com", "상시")
+        doc_labels = [i["label"] for i in items if i["kind"] == "document"]
+        self.assertGreaterEqual(len(doc_labels), 3)
+        self.assertTrue(any("소득" in label or "근로" in label for label in doc_labels))
 
     def test_rental_house_without_url_gets_portal_link(self):
         # 실데이터: rental_houses는 신청 URL이 없어 contact 채널이 됨

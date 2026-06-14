@@ -207,3 +207,25 @@ class ApplicationStatusRequest(BaseModel):
 
 class ItemCheckRequest(BaseModel):
     checked: bool = Field(..., description="체크 여부")
+
+
+# ════════════════════════════════════════════════════════════════
+# 4. 대화형 신청 도우미 (ConverseAgent) — docs/ADR-001-conversational-apply-flow.md
+# ════════════════════════════════════════════════════════════════
+
+class ConverseRequest(BaseModel):
+    message:          str            = Field(default="", max_length=1000, description="사용자 발화 한 턴")
+    session_id:       str | None     = Field(None, description="대화 세션 ID (없으면 새로 발급)")
+    user_id:          str | None     = Field(None, description="저장된 사용자 프로필 ID (선택)")
+    selected_doc_id:  str | None     = Field(None, description="프론트에서 카드 클릭으로 선택한 정책 doc_id (선택)")
+    policy:           dict[str, Any] | None = Field(None, description="카드에서 직접 선택한 정책 ref")
+
+
+class ConverseResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")  # intent별 cards/documents/benefit 등 가변 필드 허용
+
+    session_id:        str                  = Field(..., description="대화 세션 ID")
+    intent:            str                  = Field(..., description="분류된 의도")
+    reply:             str                  = Field(..., description="대화체 응답")
+    selected_policy:   dict[str, Any] | None = Field(None, description="현재 선택된 정책")
+    suggested_actions: list[dict[str, Any]] = Field(default_factory=list, description="후속 액션칩")

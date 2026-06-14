@@ -9,7 +9,6 @@ import {
   ExternalLink,
   Loader2,
   LogIn,
-  MessageCircle,
   Search,
   Send,
   Sparkles,
@@ -38,6 +37,7 @@ import {
 } from './appConfig.js';
 import ApplyPanel from './components/ApplyPanel.jsx';
 import MyApplicationsPanel from './components/MyApplicationsPanel.jsx';
+import ChatFlowPanel from './components/ChatFlowPanel.jsx';
 import {
   createApplyPlan,
   fetchApplication,
@@ -49,7 +49,6 @@ import {
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
 const RECOMMEND_URL = `${API_BASE_URL}/recommend`;
 const USER_URL = `${API_BASE_URL}/user`;
-const CHAT_URL = `${API_BASE_URL}/chat`;
 
 function sanitizeProfile(profile) {
   if (!profile) return null;
@@ -88,26 +87,6 @@ function hasMeaningfulProfile(profile) {
       profile.region_sido ||
       profile.region_sigungu ||
       profile.employment_status
-  );
-}
-
-function buildChatUserContext(condition = {}, profile = {}) {
-  const regionSido = condition.region_sido || profile?.region_sido || '';
-  const regionSigungu = condition.region_sigungu || profile?.region_sigungu || '';
-  const merged = {
-    age: condition.age ?? profile?.age ?? null,
-    gender: condition.gender || profile?.gender || '',
-    region: condition.region || [regionSido, regionSigungu].filter(Boolean).join(' '),
-    region_sido: regionSido,
-    region_sigungu: regionSigungu,
-    status: condition.status || '',
-    employment_status: condition.employment_status || profile?.employment_status || '',
-    interest: condition.interest || '',
-    income: condition.income || '',
-    housing_status: condition.housing_status || '',
-  };
-  return Object.fromEntries(
-    Object.entries(merged).filter(([, value]) => value !== null && value !== undefined && value !== '')
   );
 }
 
@@ -566,7 +545,7 @@ function PolicyCard({ policy, index, onChat, onPrepare, onApply }) {
       <div className="policy-actions">
         <button className="primary-button" type="button" onClick={() => onApply(policy)}><Send size={16} /> 신청 준비하기</button>
         <button className="ghost-button" type="button" onClick={() => onPrepare(policy)}><ClipboardList size={16} /> 준비 체크 시작</button>
-        <button className="ghost-button" type="button" onClick={() => onChat(policy)}><MessageCircle size={16} /> 정책 상담하기</button>
+        <button className="ghost-button" type="button" onClick={() => onChat(policy)}><Search size={16} /> 이 정책 자세히 보기</button>
         {url && <a className="link-button" href={url} target="_blank" rel="noreferrer">신청/참고 링크 열기 <ExternalLink size={15} /></a>}
       </div>
     </article>
@@ -575,45 +554,6 @@ function PolicyCard({ policy, index, onChat, onPrepare, onApply }) {
 
 function policyKey(policy) {
   return policy?.doc_id || `${policy?.source_table || 'policy'}:${policy?.source_id || policy?.policy_name || 'unknown'}`;
-}
-
-function ChatPanel({ policy, messages, input, loading, suggestions, onInput, onSend, onUseSuggestion }) {
-  if (!policy) return null;
-  return (
-    <section className="panel chat-panel">
-      <div className="chat-head">
-        <div>
-          <p className="card-eyebrow">정책별 상담</p>
-          <h2>{displayValue(policy.policy_name, '선택한 정책')}</h2>
-        </div>
-        <span className="count-badge">{displayValue(policy.source_label || policy.domain_label, '정책 DB')}</span>
-      </div>
-      <div className="chat-window">
-        {messages.length === 0 ? (
-          <div className="chat-empty">
-            <MessageCircle size={24} />
-            <p>이 정책에서 필요한 서류, 신청 방법, 자격 조건을 물어볼 수 있어요.</p>
-          </div>
-        ) : messages.map((message, index) => (
-          <div className={`chat-bubble ${message.role === 'user' ? 'user' : 'assistant'}`} key={`${message.role}-${index}`}>
-            <p>{message.content}</p>
-          </div>
-        ))}
-        {loading && <div className="chat-bubble assistant"><p><Loader2 className="spin inline-spin" size={16} /> 확인 중입니다.</p></div>}
-      </div>
-      {suggestions.length > 0 && (
-        <div className="suggestion-row">
-          {suggestions.slice(0, 3).map((suggestion) => (
-            <button type="button" className="suggestion-chip" key={suggestion} onClick={() => onUseSuggestion(suggestion)}>{suggestion}</button>
-          ))}
-        </div>
-      )}
-      <form className="chat-form" onSubmit={onSend}>
-        <input value={input} onChange={(event) => onInput(event.target.value)} placeholder="이 정책에서 필요한 건 뭐야?" />
-        <button className="primary-button icon-button" type="submit" disabled={loading || !input.trim()}><Send size={17} /></button>
-      </form>
-    </section>
-  );
 }
 
 export default function App() {
@@ -626,11 +566,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [activePolicy, setActivePolicy] = useState(null);
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatByPolicy, setChatByPolicy] = useState({});
-  const [chatSuggestions, setChatSuggestions] = useState([]);
+  const [seedPolicy, setSeedPolicy] = useState(null);
   const [selectedPrepPolicy, setSelectedPrepPolicy] = useState(null);
   const [applyPlan, setApplyPlan] = useState(null);
   const [myApplications, setMyApplications] = useState([]);
@@ -646,8 +582,6 @@ export default function App() {
   });
 
   const data = useMemo(() => normalizeResult(result), [result]);
-  const activePolicyKey = activePolicy ? policyKey(activePolicy) : '';
-  const activeMessages = activePolicyKey ? (chatByPolicy[activePolicyKey] || []) : [];
   const selectedPrepPolicyKey = selectedPrepPolicy ? policyKey(selectedPrepPolicy) : '';
   const selectedPrepChecked = selectedPrepPolicyKey ? (checkedPrepByPolicy[selectedPrepPolicyKey] || {}) : {};
   useEffect(() => {
@@ -706,12 +640,10 @@ export default function App() {
       const nextResult = await response.json();
       setResult(nextResult);
       setErrorMessage(nextResult?.message || '');
-      setActivePolicy(null);
+      setSeedPolicy(null);
       setSelectedPrepPolicy(null);
       setApplyPlan(null);
       setApplyError('');
-      setChatInput('');
-      setChatSuggestions([]);
     } catch (error) {
       setErrorMessage('백엔드 연결에 실패했습니다. VITE_API_URL과 서버 CORS 설정을 확인해주세요.');
       console.error(error);
@@ -720,14 +652,14 @@ export default function App() {
     }
   }
 
-  function openPolicyChat(policy) {
-    setActivePolicy(policy);
-    setChatInput('');
-    setChatSuggestions([
-      '이 정책에서 필요한 서류는 뭐야?',
-      '내가 신청 가능할까?',
-      '신청 순서를 알려줘',
-    ]);
+  function openConverseForPolicy(policy) {
+    setSeedPolicy(policy);
+    window.requestAnimationFrame(() => {
+      document.getElementById('chat-flow-panel')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
   }
 
   async function refreshMyApplications(userId) {
@@ -812,46 +744,6 @@ export default function App() {
     setCheckedPrepByPolicy((prev) => togglePreparationItem(prev, policyId, item, checked));
   }
 
-  async function sendChatMessage(event, forcedText = '') {
-    event?.preventDefault();
-    if (!activePolicy) return;
-    const text = (forcedText || chatInput).trim();
-    if (!text) return;
-    const key = policyKey(activePolicy);
-    const nextMessages = [...(chatByPolicy[key] || []), { role: 'user', content: text }];
-    setChatByPolicy((prev) => ({ ...prev, [key]: nextMessages }));
-    setChatInput('');
-    setChatLoading(true);
-    try {
-      const response = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          policy: activePolicy,
-          user_context: buildChatUserContext(data.user_condition || {}, profile || {}),
-          messages: nextMessages,
-        }),
-      });
-      if (!response.ok) throw new Error(`챗봇 응답 오류: ${response.status} ${await response.text()}`);
-      const payload = await response.json();
-      const answer = payload.answer || '답변을 생성하지 못했습니다.';
-      setChatByPolicy((prev) => ({ ...prev, [key]: [...nextMessages, { role: 'assistant', content: answer }] }));
-      setChatSuggestions(Array.isArray(payload.suggested_questions) ? payload.suggested_questions : []);
-    } catch (error) {
-      setChatByPolicy((prev) => ({
-        ...prev,
-        [key]: [...nextMessages, { role: 'assistant', content: '챗봇 연결에 실패했습니다. 백엔드 서버와 /chat 설정을 확인해주세요.' }],
-      }));
-      console.error(error);
-    } finally {
-      setChatLoading(false);
-    }
-  }
-
-  function useChatSuggestion(suggestion) {
-    sendChatMessage(null, suggestion);
-  }
-
   return (
     <main className="page">
       <section className="hero">
@@ -907,18 +799,7 @@ export default function App() {
         </aside>
 
         <section className="right-column">
-          {activePolicy && (
-            <ChatPanel
-              policy={activePolicy}
-              messages={activeMessages}
-              input={chatInput}
-              loading={chatLoading}
-              suggestions={chatSuggestions}
-              onInput={setChatInput}
-              onSend={sendChatMessage}
-              onUseSuggestion={useChatSuggestion}
-            />
-          )}
+          <ChatFlowPanel baseUrl={API_BASE_URL} userId={profile?.user_id} seededPolicy={seedPolicy} />
           {result ? (
             <>
               <div className="section-title">
@@ -938,7 +819,7 @@ export default function App() {
                     <PolicyCard
                       policy={policy}
                       index={index}
-                      onChat={openPolicyChat}
+                      onChat={openConverseForPolicy}
                       onPrepare={openPreparationBoard}
                       onApply={startApplyPlan}
                       key={`${policy.policy_name}-${index}`}

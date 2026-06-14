@@ -77,6 +77,12 @@ DOMAIN_DEFAULT_DOCUMENTS: dict[str, list[str]] = {
         "소득 증빙 서류",
         "임대차계약서 사본 (해당 시)",
     ],
+    "policy_finance": [
+        "신분증",
+        "주민등록등본",
+        "소득 또는 근로 증빙 서류",
+        "본인 명의 통장사본",
+    ],
     "training": [
         "신분증",
         "국민내일배움카드 (HRD-Net에서 발급)",
@@ -87,6 +93,13 @@ DOMAIN_DEFAULT_DOCUMENTS: dict[str, list[str]] = {
         "사업자등록증명 (기창업자인 경우)",
     ],
 }
+
+STUDENT_LOAN_DOCUMENTS = [
+    "신분증",
+    "재학증명서 또는 학적 확인 서류",
+    "학자금 지원구간 산정 정보 확인",
+    "본인 명의 계좌 정보",
+]
 
 # 도메인별 대표 포털 (신청 URL이 없을 때 안내 링크)
 DOMAIN_FALLBACK_LINKS: dict[str, dict[str, str]] = {
@@ -100,6 +113,21 @@ DOMAIN_FALLBACK_LINKS: dict[str, dict[str, str]] = {
 
 def default_documents_for_domain(domain: str) -> list[str]:
     return list(DOMAIN_DEFAULT_DOCUMENTS.get(str(domain or ""), []))
+
+
+def default_documents_for_policy(context: dict) -> list[str]:
+    """정책 문맥까지 고려한 기본 서류.
+
+    같은 loan 도메인이라도 학자금대출과 전월세 대출은 준비 서류가 다르다.
+    """
+    domain = str(context.get("domain") or "")
+    text = " ".join(
+        str(context.get(key) or "")
+        for key in ["title", "summary", "target", "source_table"]
+    )
+    if domain == "loan" and "학자금" in text:
+        return list(STUDENT_LOAN_DOCUMENTS)
+    return default_documents_for_domain(domain)
 
 
 def fallback_link_for_domain(domain: str) -> dict | None:

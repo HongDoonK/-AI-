@@ -6,6 +6,7 @@
 
 # Editor-local settings
 .vscode/
+.claude/
 
 # Python generated files and local virtualenvs
 __pycache__/

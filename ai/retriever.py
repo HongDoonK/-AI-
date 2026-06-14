@@ -24,6 +24,9 @@ INTEREST_TERMS = {
     "금융": ["금융", "대출", "저축", "자산", "소득", "지원금", "목돈", "적금", "예금", "통장", "재테크", "투자", "주식"],
 }
 
+ASSET_BUILDING_TERMS = ["목돈", "저축", "적금", "자산", "자산형성", "통장", "재테크", "매칭", "금융교육", "재무상담"]
+LOAN_TERMS = ["대출", "융자", "보증", "빌리"]
+
 ALWAYS_OPEN_TERMS = ["상시", "수시", "연중", "예산 소진", "별도 문의", "문의", "미정"]
 
 INTEREST_DOMAINS = {
@@ -432,6 +435,9 @@ def _faiss_rank(
 
 
 def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
+    input_text = user_input or ""
+    asset_building_requested = any(term in input_text for term in ASSET_BUILDING_TERMS)
+    loan_requested = any(term in input_text for term in LOAN_TERMS)
     query_terms = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", user_input or ""))
     for key in [
         "region", "region_sido", "region_sigungu", "employment_status",
@@ -474,6 +480,10 @@ def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.Dat
             str(row.get(col) or "")
             for col in ["domain", "source_table", "category_main", "category_sub", "keyword", "policy_name", "title"]
         )
+        combined_text = f"{haystack} {category_text}"
+        is_loan_domain = str(row.get("domain") or "") == "loan" or str(row.get("source_table") or "") == "smallloan_youth"
+        has_loan_signal = is_loan_domain or any(term in combined_text for term in LOAN_TERMS)
+        has_asset_signal = any(term in combined_text for term in ASSET_BUILDING_TERMS)
 
         score = 0.0
         for term in query_terms:
@@ -487,6 +497,15 @@ def _keyword_rank(user_input: str, condition: dict[str, Any], candidates: pd.Dat
                 score += 4.0
             elif term in haystack:
                 score += 1.5
+
+        if condition.get("interest") == "금융":
+            if loan_requested:
+                score += 14.0 if has_loan_signal else -2.0
+            elif asset_building_requested:
+                if has_asset_signal:
+                    score += 10.0
+                if has_loan_signal:
+                    score -= 8.0
 
         if condition.get("status") and condition["status"] in haystack:
             score += 3.0

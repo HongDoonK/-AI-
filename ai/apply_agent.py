@@ -16,7 +16,7 @@ from typing import Any
 from ai.chat_text_utils import _clean, _split_items
 from ai.llm_client import LLMUnavailable, create_structured_output, llm_enabled
 from ai.document_registry import (
-    default_documents_for_domain,
+    default_documents_for_policy,
     fallback_link_for_domain,
     find_issuer,
 )
@@ -33,6 +33,20 @@ def _to_int(value: Any) -> int | None:
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s,()\uAC00-\uD7A3]+|www\.[^\s,()\uAC00-\uD7A3]+")
+
+
+def _extract_url(value: Any) -> str:
+    """텍스트 안의 URL을 뽑아 브라우저에서 열 수 있는 형태로 정규화한다."""
+    text = _clean(value)
+    if not text:
+        return ""
+    match = _URL_PATTERN.search(text)
+    if not match:
+        return text if text.startswith("http") else ""
+    url = match.group(0).rstrip(".,;")
+    if url.startswith("www."):
+        return f"https://{url}"
+    return url
 
 
 def _split_documents(value: Any) -> list[str]:
@@ -122,17 +136,29 @@ def check_eligibility(context: dict[str, Any], profile: dict[str, Any] | None) -
 def resolve_channel(context: dict[str, Any]) -> tuple[str, str]:
     """신청 채널과 URL을 결정한다. 반환: (channel, url)"""
     original = context.get("original") or {}
-    url = (
-        _clean(context.get("url"))
-        or _clean(original.get("application_url"))
-        or _clean(original.get("apply_url"))
-        or _clean(original.get("detail_url"))
-        or _clean(original.get("ref_url1"))
-    )
-    if url.startswith("http"):
+    url_fields = [
+        context.get("url"),
+        original.get("application_url"),
+        original.get("apply_url"),
+        original.get("detail_url"),
+        original.get("ref_url1"),
+        original.get("ref_url2"),
+        original.get("title_link"),
+        original.get("rltSite"),
+        original.get("myhome_url"),
+        original.get("jnMthd"),
+    ]
+    url = next((candidate for value in url_fields if (candidate := _extract_url(value))), "")
+    if url:
         return "online", url
 
-    apply_method = _clean(original.get("apply_method"))
+    apply_method = " ".join(
+        _clean(original.get(key))
+        for key in ["apply_method", "jnMthd"]
+        if _clean(original.get(key))
+    )
+    if any(word in apply_method for word in ["온라인", "홈페이지", "사이트", "포털", "모바일", "앱"]):
+        return "online", ""
     if "방문" in apply_method:
         return "visit", ""
     if "우편" in apply_method:
@@ -175,7 +201,7 @@ def build_checklist(
     documents = _split_documents(original.get("submit_docs"))[:8]
     if len(documents) < 2:
         # 원문이 비었거나 안내문 한 줄뿐이면 도메인 기본 서류로 보강
-        for default_doc in default_documents_for_domain(domain):
+        for default_doc in default_documents_for_policy(context):
             if all(default_doc[:4] not in doc for doc in documents):
                 documents.append(default_doc)
         documents = documents[:8]
@@ -280,8 +306,13 @@ def generate_draft_answers(context: dict[str, Any], profile: dict[str, Any] | No
             schema=_DRAFT_SCHEMA,
             max_output_tokens=700,
         )
-    except LLMUnavailable as exc:
-        print(f"[ai.apply_agent] LLM draft unavailable, skipping: {exc}")
+    except Exception as exc:
+        # LLMUnavailable(키 미설정/비활성)뿐 아니라 인증 오류(401)·레이트리밋·
+        # 네트워크 오류 등 비-LLMUnavailable 예외도 잡아 ⑥ 초안만 조용히
+        # 생략한다(설계: docs/AGENT_APPLY_DESIGN.md §6). 다른 모듈과 동일하게
+        # 예기치 못한 예외만 로그를 남긴다.
+        if not isinstance(exc, LLMUnavailable):
+            print(f"[ai.apply_agent] LLM draft failed, skipping draft: {exc}")
         return None
     draft = {
         DRAFT_FIELD_LABELS[key]: _clean(value)

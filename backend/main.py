@@ -11,9 +11,11 @@ except ModuleNotFoundError:
         return False
 
 from ai.apply_agent import ApplyAgent
+from ai.converse_agent import ConverseAgent, _policy_ref
+from ai.intent_router import RECOMMEND
 from ai.policy_chat_agent import PolicyChatAgent
 from ai.recommender import recommend_policy
-from backend import application_store
+from backend import application_store, conversation_store
 from backend.db import create_tables, get_centers_by_region, get_user, save_user
 from backend.models import (
     ApplicationResponse,
@@ -21,6 +23,8 @@ from backend.models import (
     ApplyPlanRequest,
     ChatRequest,
     ChatResponse,
+    ConverseRequest,
+    ConverseResponse,
     ItemCheckRequest,
     RecommendRequest,
     RecommendResponse,
@@ -31,6 +35,20 @@ from backend.models import (
 
 policy_chat_agent = PolicyChatAgent()
 apply_agent = ApplyAgent(chat_agent=policy_chat_agent)
+converse_agent = ConverseAgent(chat_agent=policy_chat_agent, apply_agent=apply_agent)
+
+
+def _prepend_policy_ref(
+    recommendations: list[dict],
+    selected_policy: dict,
+) -> list[dict]:
+    selected_doc_id = selected_policy.get("doc_id")
+    deduped = [
+        card for card in recommendations
+        if not selected_doc_id or card.get("doc_id") != selected_doc_id
+    ]
+    cards = [selected_policy, *deduped]
+    return [{**card, "rank": index + 1} for index, card in enumerate(cards)]
 
 
 @asynccontextmanager
@@ -212,3 +230,83 @@ def update_application_item(application_id: str, item_id: str, request: ItemChec
     if not application:
         raise HTTPException(status_code=404, detail="신청 건 또는 항목을 찾을 수 없습니다.")
     return application
+
+# ── 대화형 신청 도우미 (docs/ADR-001-conversational-apply-flow.md) ──
+
+
+@app.post("/agent/converse", response_model=ConverseResponse)
+def converse(request: ConverseRequest):
+    try:
+        session = conversation_store.get_or_create_session(request.session_id, request.user_id)
+        session_id = session["session_id"]
+
+        # 선택 정책: 세션 복원값을 기본으로, 프론트가 카드 클릭으로 보낸 정책 ref/doc_id가 있으면 덮어쓴다
+        selected = session.get("selected_policy")
+        last_recommendations = session.get("last_recommendations", [])
+        if request.policy:
+            selected = _policy_ref(request.policy, 1)
+            last_recommendations = _prepend_policy_ref(last_recommendations, selected)
+            conversation_store.update_session(
+                session_id,
+                selected_policy=selected,
+                last_recommendations=last_recommendations,
+            )
+        elif request.selected_doc_id:
+            match = next(
+                (card for card in last_recommendations
+                 if card.get("doc_id") == request.selected_doc_id),
+                None,
+            )
+            if match:
+                selected = match
+
+        profile = get_user(request.user_id) if request.user_id else None
+        conversation_store.add_turn(session_id, "user", request.message)
+
+        if request.policy and not request.message.strip():
+            result = converse_agent.select(selected)
+        else:
+            result = converse_agent.respond(
+                message=request.message,
+                selected_policy=selected,
+                last_recommendations=last_recommendations,
+                profile=profile,
+            )
+
+        # 상태 영속화: 추천 턴은 선택 해제+추천 목록 갱신, 그 외엔 선택 정책만 반영
+        if result.get("intent") == RECOMMEND:
+            conversation_store.update_session(
+                session_id,
+                last_recommendations=result.get("last_recommendations", []),
+                last_intent=RECOMMEND,
+                clear_selection=True,
+            )
+        elif result.get("selected_policy"):
+            conversation_store.update_session(
+                session_id,
+                selected_policy=result["selected_policy"],
+                last_intent=result.get("intent"),
+            )
+        else:
+            conversation_store.update_session(session_id, last_intent=result.get("intent"))
+
+        conversation_store.add_turn(
+            session_id, "assistant", result["reply"],
+            intent=result.get("intent"),
+            payload={key: value for key, value in result.items() if key != "reply"},
+        )
+
+        result.setdefault("selected_policy", None)
+        result["session_id"] = session_id
+        return result
+    except Exception as e:
+        print(f"/agent/converse 처리 중 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"대화 처리 중 오류 발생: {str(e)}")
+
+
+@app.get("/agent/converse/{session_id}")
+def get_conversation(session_id: str):
+    session = conversation_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+    return {"session": session, "turns": conversation_store.get_turns(session_id)}
