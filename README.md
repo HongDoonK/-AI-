@@ -2,7 +2,9 @@
 
 통합청년 API와 SQLite DB를 기반으로 사용자의 나이, 성별, 지역, 상태, 관심 분야를 분석해 현재 신청 가능한 청년 정책과 가까운 청년센터를 추천하는 FastAPI + React 프로젝트입니다.
 
-사용자가 자연어로 상황을 입력하면 AI 모듈이 조건을 추출하고, `search_documents` 통합 검색 테이블과 `policies_processed` fallback 테이블에서 정책 후보를 검색한 뒤 추천 사유, 지원 내용, 신청 기간, 신청 링크, 체크리스트를 반환합니다. OpenAI API 키가 있으면 LLM 기반 조건 추출/응답 생성을 사용하고, 없으면 규칙 기반 fallback으로 동작합니다.
+사용자가 자연어로 상황을 입력하면 AI 모듈이 조건을 추출하고, `search_documents` 통합 검색 테이블과 `policies_processed` fallback 테이블에서 정책 후보를 검색한 뒤 추천 사유, 지원 내용, 신청 기간, 신청 링크, 체크리스트를 반환합니다.
+
+정책의 **사실(금액·기간·자격·신청 URL)은 RAG·규칙 엔진이 책임지고, LLM은 자연어 조건 추출과 문장 다듬기만 담당하는 교체 가능한 언어 계층**입니다. 기본값(`LLM_PROVIDER=none`)에서는 LLM 없이 규칙 기반만으로 완전히 동작하며, 필요 시 HuggingFace 오픈모델(기본 `Qwen2.5-7B-Instruct`)이나 OpenAI로 공급자를 바꿔 끼울 수 있습니다 (설계: `docs/ADR-002-llm-provider-and-surface-consolidation.md`).
 
 이 프로젝트는 단순 질의응답 챗봇보다 "정책 추천 업무 흐름" 구현에 초점을 둡니다. 자연어 조건 추출, RAG 검색, 정책 필터링, 신청 가능성 판단, 소득/세금 계산, 정책별 후속 상담, 신청 준비 체크리스트 생성을 하나의 워크플로우로 연결합니다.
 
@@ -18,6 +20,8 @@
 - 지역 기반 청년센터 목록 조회
 - 정책별 후속 질문에 답하는 `/chat` 상담 에이전트
 - 추천→정책 선택→서류/지원금/적격성→신청 준비를 한 대화창에서 잇는 대화형 신청 도우미
+- Hero "나의 상황 입력"과 대화형 도우미가 하나의 추천 세션을 공유 (단일 추천 출처, "정책 N" 모호성 해소)
+- 공급자 무관 LLM 계층 (`none`·HuggingFace 오픈모델·OpenAI 교체 가능, 기본 `none`이면 규칙 fallback만으로 동작)
 - 추천 정책의 마감일, 신청 우선순위, 준비 서류를 정리하는 신청 준비 리포트
 - 저장된 프로필과 정책 조건을 비교하는 자동 적격성 1차 검증
 - 2026년 기준 중위소득 환산 및 근로소득 실수령액 계산기
@@ -40,7 +44,7 @@
 - `eligibilityCheck.js`: 저장된 프로필과 정책 조건을 비교해 신청이 어려운 정책 탐지
 - `incomeTax.js`, `medianIncome.js`: 소득/중위소득 관련 계산 도구
 
-OpenAI API가 설정된 경우 `llm_client.py`가 Responses API의 구조화 출력을 사용해 조건 추출과 추천 문장 생성을 수행합니다. API 키가 없거나 LLM 호출에 실패하면 규칙 기반 로직으로 fallback하여 시연 안정성을 유지합니다.
+`llm_client.py`는 공급자 무관 어댑터(`LLM_PROVIDER`: `none`·`hf`·`local`·`openai`)로, 활성화된 경우 자연어 조건 추출과 추천 문장 생성에만 LLM을 사용합니다. 금액·날짜·자격 같은 사실은 LLM이 생성하지 않고 DB/규칙에서 가져오며(grounded-only), 호출에 실패하면 규칙 기반으로 fallback해 시연 안정성을 유지합니다.
 
 ### 워크플로우 기반 복합 로직
 
@@ -61,14 +65,14 @@ OpenAI API가 설정된 경우 `llm_client.py`가 Responses API의 구조화 출
 ### RAG와 Tool Calling 관점
 
 - RAG: `search_documents` 16,571건의 통합 검색 문서와 FAISS 임베딩을 이용해 사용자 조건에 맞는 정책 후보를 검색합니다.
-- Tool Calling 관점: OpenAI의 명시적 function calling을 전면에 둔 구조는 아니지만, 추천 엔진이 내부 도구 모듈을 단계별로 호출하는 방식으로 구현되어 있습니다. 발표 시에는 `조건 추출 도구 -> 검색 도구 -> 생성 도구 -> 상담 도구 -> 신청 준비 도구`의 순서로 설명하면 좋습니다.
+- Tool Calling 관점: LLM의 명시적 function calling을 전면에 둔 구조는 아니지만, 추천 엔진이 내부 도구 모듈을 단계별로 호출하는 방식으로 구현되어 있습니다. 발표 시에는 `조건 추출 도구 -> 검색 도구 -> 생성 도구 -> 상담 도구 -> 신청 준비 도구`의 순서로 설명하면 좋습니다.
 - 업무 로직: 정책 데이터의 도메인, 지역, 연령, 신청 기간, 소득 정보를 반영하므로 단순한 일반 Q&A보다 과제 주제에 맞는 정교한 추천 로직을 갖습니다.
 
 ## 프로젝트 구조
 
 ```text
 backend/
-  main.py              FastAPI 서버 진입점, /recommend 및 /user API
+  main.py              FastAPI 서버 진입점, /recommend·/chat·/user·/agent/* API
   db.py                SQLite 연결, 테이블 생성, 사용자/센터 조회
   application_store.py 신청 플랜 저장/조회
   conversation_store.py 대화 세션과 턴 히스토리 저장
@@ -87,7 +91,7 @@ ai/
   intent_router.py        대화형 신청 도우미 의도 분류
   converse_agent.py       추천/선택/서류/지원금/적격성 대화 오케스트레이션
   benefit_estimator.py    지원금·기간·한도 구조화
-  llm_client.py           OpenAI Responses API 구조화 출력 클라이언트
+  llm_client.py           공급자 무관 LLM 클라이언트 (none·openai·hf·local, 기본 none)
   recommender.py          recommend_policy() 통합 함수
 
 frontend/
@@ -235,9 +239,15 @@ VITE_API_URL=http://127.0.0.1:8000
       "checklist": ["...", "...", "..."]
     }
   ],
-  "centers": []
+  "centers": [],
+  "session_id": "대화 세션 ID (채팅과 공유)",
+  "cards": [
+    {"rank": 1, "doc_id": "policies_processed:...", "title": "청년월세지원", "source_table": "policies_processed", "source_id": "..."}
+  ]
 }
 ```
+
+`session_id`와 `cards`는 additive 필드입니다(D1, `docs/ADR-002-...`). Hero "나의 상황 입력"이 만든 추천 세션을 대화형 신청 도우미(`POST /agent/converse`)가 같은 `session_id`로 이어받아, 두 화면이 **하나의 추천 목록**을 공유합니다. 따라서 채팅에서 "정책 2 신청할래"라고 하면 Hero가 보여준 2번 정책을 정확히 가리킵니다.
 
 ### 사용자 프로필 저장
 
@@ -356,8 +366,8 @@ VITE_API_URL=http://127.0.0.1:8000
 -> db_loader: data/youth_policy.db의 search_documents 로드
 -> retriever: 신청 가능 정책 필터링 + FAISS/키워드 검색
 -> generator: 추천 사유와 체크리스트 생성
--> main.py: 지역 기반 청년센터 조회
--> 추천 정책, 사용자 조건, 청년센터 JSON 반환
+-> main.py: 지역 기반 청년센터 조회 + 추천을 대화 세션에 시드(session_id)
+-> 추천 정책, 사용자 조건, 청년센터, session_id/cards JSON 반환 (채팅과 공유)
 ```
 
 ## DB 구조
@@ -473,7 +483,17 @@ API 레벨 검증:
 - `USE_FAISS=1` 상태에서 `match_method`가 `FAISS 임베딩`인 추천 결과 반환 확인
 - `backend.preprocessing` 실행 후 `search_documents` 16,571건 생성 확인
 
-평가 기준 관점에서는 RAG와 워크플로우 기반 복합 로직은 강하게 구현되어 있습니다. 다만 OpenAI의 명시적 function calling을 직접 사용하기보다는 내부 모듈을 도구처럼 순차 호출하는 구조이므로, 발표에서는 이 부분을 "도구형 모듈 호출 기반 에이전트 워크플로우"로 설명하는 것이 적절합니다.
+평가 기준 관점에서는 RAG와 워크플로우 기반 복합 로직은 강하게 구현되어 있습니다. LLM 공급자(OpenAI·HuggingFace 오픈모델)는 부품처럼 교체 가능하고, 명시적 function calling을 전면에 두기보다 내부 모듈을 도구처럼 순차 호출하는 구조이므로, 발표에서는 이 부분을 "도구형 모듈 호출 기반 에이전트 워크플로우"로 설명하는 것이 적절합니다.
+
+## 설계 문서
+
+주요 설계 결정과 워크플로우는 `docs/`에 ADR/설계 문서로 기록되어 있습니다.
+
+- `docs/ADR-001-conversational-apply-flow.md` — 대화형 신청 절차 도우미(ConverseAgent) 설계
+- `docs/ADR-002-llm-provider-and-surface-consolidation.md` — LLM 공급자 교체(OpenAI→오픈모델)와 입력 Surface 통합(D1/D2)
+- `docs/AGENT_APPLY_DESIGN.md` — 신청 도우미 에이전트(신청 플랜·상태머신) 설계
+- `docs/REFACTORING_PLAN.md` — 책임 분리 리팩터링 계획
+- `docs/GENERALIZATION_EVALUATION_WORKFLOW.md` — 추천 일반화 성능 평가 워크플로우
 
 ## 주의 사항
 
@@ -482,4 +502,4 @@ API 레벨 검증:
 - `search_documents`가 비어 있으면 `python -m backend.preprocessing`을 다시 실행합니다.
 - `data/index/*.npy`는 FAISS 임베딩 캐시입니다. 정책 데이터가 바뀌면 새 캐시가 자동 생성될 수 있습니다.
 - `frontend/node_modules`와 빌드 결과물은 `npm install`, `npm run build`로 다시 만들 수 있습니다.
-- OpenAI 또는 FAISS 의존성이 없어도 fallback 로직으로 기본 추천은 동작하지만, 추천 품질은 달라질 수 있습니다.
+- LLM(`LLM_PROVIDER=none`) 또는 FAISS 의존성이 없어도 fallback 로직으로 기본 추천은 동작하지만, 추천 품질은 달라질 수 있습니다.
