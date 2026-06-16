@@ -55,7 +55,7 @@ function ChatCardList({ cards, onSelect, disabled }) {
 }
 
 // onApplyPlan: App이 주입하는 콜백 — 선택된 정책으로 /agent/apply-plan 호출
-export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, onApplyPlan }) {
+export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, seededRecommendation, onApplyPlan }) {
   const [messages, setMessages] = useState([GREETING]);
   const [sessionId, setSessionId] = useState(null);
   const [input, setInput] = useState('');
@@ -64,6 +64,7 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, onApplyPl
   // 현재 선택된 정책 — create_apply_plan 액션칩 인터셉트에 사용
   const [chatSelectedPolicy, setChatSelectedPolicy] = useState(null);
   const lastSeededDocId = useRef(null);
+  const lastSeededSessionId = useRef(null);
 
   function syncSelectedPolicy(res) {
     if (res.intent === 'recommend') {
@@ -94,6 +95,30 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, onApplyPl
       setLoading(false);
     }
   }
+
+  // D1: Hero "나의 상황 입력"이 만든 추천 세션/카드를 채팅에 시드한다.
+  // 채팅은 별도 추천 목록을 만들지 않고 이 세션을 단일 출처로 이어받는다.
+  useEffect(() => {
+    const sid = seededRecommendation?.sessionId;
+    if (!sid || lastSeededSessionId.current === sid) return;
+    lastSeededSessionId.current = sid;
+    setSessionId(sid);
+    setChatSelectedPolicy(null);
+    setError('');
+    const cards = seededRecommendation.cards || [];
+    const text = cards.length
+      ? `회원님 조건으로 신청 가능한 정책 ${cards.length}개예요. 아래 카드를 누르거나 "정책 2 신청할래"처럼 말해 상담을 이어가세요.`
+      : '조건에 맞는 정책을 찾지 못했어요. 왼쪽 "나의 상황 입력"에서 조건을 바꿔 다시 찾아보세요.';
+    setMessages([
+      GREETING,
+      {
+        role: 'assistant',
+        text,
+        actions: cards.slice(0, 3).map((card) => ({ label: `${card.rank}번 선택`, intent: 'select', ordinal: card.rank })),
+        cards,
+      },
+    ]);
+  }, [seededRecommendation]);
 
   // 정책 카드에서 "이 정책 자세히 보기" 클릭으로 대화 시작할 때
   useEffect(() => {
@@ -201,9 +226,9 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, onApplyPl
       <div className="chat-head">
         <div>
           <p className="card-eyebrow">대화형 신청 도우미</p>
-          <h2><MessagesSquare size={19} /> 한 번에 물어보기</h2>
+          <h2><MessagesSquare size={19} /> 고른 정책 상담·신청</h2>
         </div>
-        <span className="count-badge">추천 · 서류 · 지원금</span>
+        <span className="count-badge">서류 · 지원금 · 신청 준비</span>
       </div>
 
       <div className="chat-window">

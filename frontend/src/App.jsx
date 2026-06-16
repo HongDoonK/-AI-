@@ -259,6 +259,8 @@ export default function App() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [seedPolicy, setSeedPolicy] = useState(null);
+  // D1: Hero 추천이 만든 대화 세션 + 카드 — 채팅과 공유하는 단일 추천 출처
+  const [chatSeed, setChatSeed] = useState(null);
   const [selectedPrepPolicy, setSelectedPrepPolicy] = useState(null);
   const [applyPlan, setApplyPlan] = useState(null);
   const [myApplications, setMyApplications] = useState([]);
@@ -324,12 +326,14 @@ export default function App() {
       const response = await fetch(RECOMMEND_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_input: enrichedInput }),
+        body: JSON.stringify({ user_input: enrichedInput, user_id: profile?.user_id || null }),
       });
       if (!response.ok) throw new Error(`서버 응답 오류: ${response.status} ${await response.text()}`);
       const nextResult = await response.json();
       setResult(nextResult);
       setErrorMessage(nextResult?.message || '');
+      // D1: Hero 추천 세션을 채팅에 시드 (단일 추천 출처)
+      setChatSeed(nextResult.session_id ? { sessionId: nextResult.session_id, cards: nextResult.cards || [] } : null);
       setSeedPolicy(null);
       setSelectedPrepPolicy(null);
       setApplyPlan(null);
@@ -504,6 +508,7 @@ export default function App() {
             baseUrl={API_BASE_URL}
             userId={profile?.user_id}
             seededPolicy={seedPolicy}
+            seededRecommendation={chatSeed}
             onApplyPlan={startApplyPlan}
           />
           {result ? (

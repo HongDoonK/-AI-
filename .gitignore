@@ -34,3 +34,8 @@ data/*.db
 
 # Test fixture DB는 스크립트로 생성 (tools/make_fixture_db.py)
 tests/fixtures/
+
+# AI 협업 산출물 (Claude Code ↔ codex) — 로컬 전용, GitHub 미게시
+docs/AI_HANDOFF.md
+reports/
+/MEMORY.md

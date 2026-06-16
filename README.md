@@ -17,6 +17,7 @@
 - FAISS/임베딩 사용이 불가능할 때 키워드 검색으로 fallback
 - 지역 기반 청년센터 목록 조회
 - 정책별 후속 질문에 답하는 `/chat` 상담 에이전트
+- 추천→정책 선택→서류/지원금/적격성→신청 준비를 한 대화창에서 잇는 대화형 신청 도우미
 - 추천 정책의 마감일, 신청 우선순위, 준비 서류를 정리하는 신청 준비 리포트
 - 저장된 프로필과 정책 조건을 비교하는 자동 적격성 1차 검증
 - 2026년 기준 중위소득 환산 및 근로소득 실수령액 계산기
@@ -32,6 +33,9 @@
 - `retriever.py`: FAISS 임베딩 검색 또는 키워드 fallback 검색
 - `generator.py`: 추천 사유, 지원 내용 요약, 신청 체크리스트 생성
 - `policy_chat_agent.py`: 특정 정책을 기준으로 서류, 자격, 신청 방법, 혜택을 후속 상담
+- `intent_router.py`, `converse_agent.py`: 대화 의도를 분류하고 추천/선택/서류/지원금/적격성 흐름을 오케스트레이션
+- `benefit_estimator.py`: 정책 원문에서 지원금, 월액, 기간, 대출 한도 등을 구조화
+- `conversation_store.py`: 대화 세션, 선택 정책, 최근 추천, 턴 히스토리 저장
 - `agentPlanner.js`: 추천 결과의 마감일과 우선순위를 분석해 신청 준비 리포트 생성
 - `eligibilityCheck.js`: 저장된 프로필과 정책 조건을 비교해 신청이 어려운 정책 탐지
 - `incomeTax.js`, `medianIncome.js`: 소득/중위소득 관련 계산 도구
@@ -66,6 +70,8 @@ OpenAI API가 설정된 경우 `llm_client.py`가 Responses API의 구조화 출
 backend/
   main.py              FastAPI 서버 진입점, /recommend 및 /user API
   db.py                SQLite 연결, 테이블 생성, 사용자/센터 조회
+  application_store.py 신청 플랜 저장/조회
+  conversation_store.py 대화 세션과 턴 히스토리 저장
   api_collector.py     통합청년 정책/청년센터 API 수집
   preprocessing.py     원본 정책 데이터 전처리 및 search_documents 생성
   models.py            Pydantic 요청/응답 모델
@@ -78,12 +84,20 @@ ai/
   retriever.py            정책 후보 필터링, FAISS 검색, 키워드 fallback
   generator.py            추천 사유/체크리스트 생성
   policy_chat_agent.py    정책별 후속 상담 에이전트
+  intent_router.py        대화형 신청 도우미 의도 분류
+  converse_agent.py       추천/선택/서류/지원금/적격성 대화 오케스트레이션
+  benefit_estimator.py    지원금·기간·한도 구조화
   llm_client.py           OpenAI Responses API 구조화 출력 클라이언트
   recommender.py          recommend_policy() 통합 함수
 
 frontend/
-  src/App.jsx          React 화면, 프로필 저장, 추천 요청
+  src/App.jsx          React 컨테이너, 프로필/추천/신청/대화 패널 연결
+  src/components/ProfileForm.jsx      프로필 입력 폼
+  src/components/PolicyCard.jsx       추천 정책 카드
+  src/components/IncomeCalculator.jsx 소득/세금 계산기
+  src/components/ChatFlowPanel.jsx    대화형 신청 도우미 패널
   src/agentPlanner.js  신청 우선순위/마감 위험 분석
+  src/converseClient.js 대화형 신청 도우미 API 클라이언트
   src/prepTracker.js   신청 준비 체크리스트 상태 관리
   src/eligibilityCheck.js  프로필 기반 적격성 1차 검증
   src/incomeTax.js     연봉 실수령액 계산
@@ -109,15 +123,16 @@ requirements.txt       백엔드 Python 의존성
 YOUTH_POLICY_API_KEY=your_youth_policy_api_key
 YOUTH_CENTER_API_KEY=your_youth_center_api_key
 
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4o-mini
-USE_OPENAI_LLM=1
+# LLM 공급자 (ADR-002 §D2): none | hf | local | openai
+LLM_PROVIDER=none
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+#HF_TOKEN=your_huggingface_token
 
 USE_FAISS=1
 FRONTEND_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-OpenAI를 사용하지 않으려면 `USE_OPENAI_LLM=0`으로 설정하거나 `OPENAI_API_KEY`를 비워두면 됩니다. FAISS 임베딩 검색을 끄고 키워드 검색만 사용하려면 `USE_FAISS=0`으로 설정합니다.
+LLM은 비핵심 언어 계층입니다(정책 사실은 RAG·규칙 엔진이 책임집니다). `LLM_PROVIDER=none`(기본)이면 규칙 fallback만으로 완전 동작하며, 데모에 권장됩니다. 오픈모델을 쓰려면 `LLM_PROVIDER=hf`(HuggingFace Inference, `HF_TOKEN` 필요) 또는 `LLM_PROVIDER=local`(오프라인 transformers 추론, 최초 1회 모델 다운로드)로 설정합니다. 기본 모델은 `Qwen/Qwen2.5-7B-Instruct`(Apache-2.0)이며 저사양에서는 `Qwen/Qwen2.5-1.5B-Instruct`를 권장합니다. 레거시 OpenAI 경로는 `LLM_PROVIDER=openai`(+ `OPENAI_API_KEY`/`OPENAI_MODEL`)로만 사용되며 점진 폐기 대상입니다. FAISS 임베딩 검색을 끄고 키워드 검색만 사용하려면 `USE_FAISS=0`으로 설정합니다.
 
 ## 백엔드 실행
 
@@ -271,6 +286,51 @@ VITE_API_URL=http://127.0.0.1:8000
 
 정책별 상담 에이전트는 DB 원문과 통합 검색 문서를 다시 조회해 제출 서류, 자격 조건, 신청 방법, 기간, 문의처를 답변합니다.
 
+### 대화형 신청 도우미
+
+`POST /agent/converse`
+
+추천, 정책 선택, 서류 안내, 지원금 정량화, 적격성 확인을 하나의 대화 세션에서 처리합니다.
+
+```json
+{
+  "message": "서울 사는 24세 청년인데 월세 지원 정책 없나?",
+  "session_id": null,
+  "user_id": "저장된 사용자 ID (선택)",
+  "selected_doc_id": null,
+  "policy": null
+}
+```
+
+`selected_doc_id`는 최근 추천 목록에서 특정 정책을 선택할 때 사용하고, `policy`는 추천 카드 클릭처럼 정책 ref 객체를 직접 넘길 때 사용합니다.
+
+응답은 공통 필드와 intent별 가변 필드를 함께 반환합니다.
+
+```json
+{
+  "session_id": "대화 세션 ID",
+  "intent": "recommend",
+  "reply": "회원님 조건 기준으로 신청 가능한 정책 5개를 찾았어요.",
+  "selected_policy": null,
+  "suggested_actions": [
+    {"label": "1번 자세히 보기", "intent": "select", "ordinal": 1}
+  ],
+  "cards": [
+    {
+      "rank": 1,
+      "doc_id": "policies_processed:...",
+      "title": "청년월세지원",
+      "source_table": "policies_processed",
+      "source_id": "..."
+    }
+  ]
+}
+```
+
+기본 응답 필드는 `session_id`, `intent`, `reply`, `selected_policy`, `suggested_actions`입니다. intent에 따라 추천 결과는 `cards`, 제출 서류는 `documents`, 지원금 정보는 `benefit`, 적격성 결과는 `eligibility`와 `eligibility_notes`로 추가됩니다.
+
+`GET /agent/converse/{session_id}`로 저장된 대화 세션과 턴 히스토리를 복원할 수 있습니다.
+
 ### 신청 도우미 에이전트
 
 `POST /agent/apply-plan`
@@ -402,7 +462,7 @@ npm test
 npm run build
 ```
 
-테스트는 OpenAI/FAISS 없이도 fallback 경로로 동작하도록 작성되어 있습니다 (`USE_OPENAI_LLM=0`, `USE_FAISS=0`).
+테스트는 LLM/FAISS 없이도 fallback 경로로 동작하도록 작성되어 있습니다 (`LLM_PROVIDER=none`, `USE_FAISS=0`). 레거시 `USE_OPENAI_LLM=0`도 호환 변수로 동일하게 LLM을 비활성화합니다.
 
 API 레벨 검증:
 

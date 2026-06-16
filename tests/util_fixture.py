@@ -16,6 +16,7 @@ def ensure_fixture_db() -> Path:
 
 def set_test_env():
     """LLM/FAISS를 끄고 fixture DB를 사용하도록 환경을 맞춘다."""
-    os.environ["USE_OPENAI_LLM"] = "0"
+    os.environ["LLM_PROVIDER"] = "none"  # ADR-002 §D2
+    os.environ["USE_OPENAI_LLM"] = "0"   # 레거시 호환
     os.environ["USE_FAISS"] = "0"
     os.environ["YOUTH_POLICY_DB_PATH"] = str(ensure_fixture_db())

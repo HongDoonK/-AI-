@@ -79,6 +79,28 @@ class ConverseApiSmokeTest(unittest.TestCase):
         self.assertEqual(session["selected_policy"]["doc_id"], "policies_processed:P001")
         self.assertEqual(session["last_recommendations"][0]["doc_id"], "policies_processed:P001")
 
+    def test_recommend_seeds_shared_session_for_chat(self):
+        # D1: /recommend가 session_id+cards를 내려주고, 채팅이 같은 세션의 추천을 이어받는다
+        rec = self.client.post("/recommend", json={"user_input": "서울 무주택 청년 월세 지원 정책"})
+        self.assertEqual(rec.status_code, 200)
+        rec_body = rec.json()
+        self.assertIn("session_id", rec_body)
+        self.assertTrue(rec_body["session_id"])
+        self.assertTrue(rec_body["cards"], "추천 카드가 세션 시드용으로 반환되어야 함")
+        # 기존 shape 보존 확인
+        self.assertIn("recommendations", rec_body)
+        self.assertIn("user_condition", rec_body)
+
+        session_id = rec_body["session_id"]
+        first_doc_id = rec_body["cards"][0]["doc_id"]
+
+        # 같은 세션에서 "정책 1 신청할래" → Hero가 시드한 목록의 1번이 선택돼야 함
+        chat = self._say("정책 1 신청할래", session_id=session_id)
+        self.assertEqual(chat.status_code, 200)
+        chat_body = chat.json()
+        self.assertIsNotNone(chat_body["selected_policy"])
+        self.assertEqual(chat_body["selected_policy"]["doc_id"], first_doc_id)
+
     def test_unknown_session_returns_404(self):
         self.assertEqual(self.client.get("/agent/converse/no-such-session").status_code, 404)
 

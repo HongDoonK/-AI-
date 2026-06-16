@@ -8,7 +8,11 @@
 | | `ai/chat_text_utils.py` (176줄) | 순수 텍스트 정제/추출 유틸 17개 |
 | | `ai/policy_chat_agent.py` (1,250줄) | PolicyChatAgent 클래스만 유지 |
 | `frontend/src/App.jsx` (896줄) | `frontend/src/appConfig.js` | REGION_OPTIONS, 스토리지 키, 순수 헬퍼 4개 |
-| | `frontend/src/App.jsx` (856줄) | React 컴포넌트만 유지 |
+| | `frontend/src/components/ProfileForm.jsx` | 프로필 입력 폼 |
+| | `frontend/src/components/PolicyCard.jsx` | 추천 결과 카드 |
+| | `frontend/src/components/IncomeCalculator.jsx` | 연봉 실수령액 계산기 |
+| | `frontend/src/components/ChatFlowPanel.jsx` | [ADR-001](ADR-001-conversational-apply-flow.md)의 대화형 신청 도우미 패널 |
+| | `frontend/src/App.jsx` | 위 컴포넌트와 신청 플랜 패널을 연결하는 얇은 컨테이너 |
 
 ## 남은 분리 계획 (다음 단계, 테스트 선행 필요)
 
@@ -22,13 +26,15 @@ PolicyChatAgent 클래스가 여전히 세 가지 책임을 가짐:
    → 클래스 본체에 유지
 - 선행 조건: `/chat` 응답 형식 고정 테스트 (의도별 golden test) 추가 후 진행
 
-### frontend/src/App.jsx (856줄)
-1. 프로필 폼 → `components/ProfileForm.jsx`
-2. 추천 결과 카드 → `components/PolicyCard.jsx`
-3. 정책 상담 패널 → `components/ChatPanel.jsx`
-4. 계산기 → `components/IncomeCalculator.jsx`
-- 선행 조건: 컴포넌트 단위 렌더 테스트 도구(vitest + testing-library) 도입 검토
-- props 경계는 현재 함수형 분리에 따라 자연스럽게 정해짐
+### frontend/src/App.jsx (컨테이너화 진행)
+프로필 폼, 추천 결과 카드, 계산기는 각각 `components/ProfileForm.jsx`,
+`components/PolicyCard.jsx`, `components/IncomeCalculator.jsx`로 분리 완료했다.
+기존 계획의 `components/ChatPanel.jsx`는 별도 구현하지 않았고, [ADR-001](ADR-001-conversational-apply-flow.md)에서 신설한
+대화형 `components/ChatFlowPanel.jsx`로 대체되었다.
+
+현재 `App.jsx`는 위 3개 컴포넌트와 `ChatFlowPanel`, 신청 플랜 패널을 import해 상태와 API 흐름을 연결하는 얇은 컨테이너 역할을 한다.
+- 남은 과제: `ChatFlowPanel.jsx`를 포함한 컴포넌트 단위 렌더 테스트 도구(vitest + testing-library) 도입 검토
+- 추가 분리는 상태 관리 경계가 더 복잡해질 때 진행
 
 ### backend/preprocessing.py (629줄)
 `rebuild_search_documents()` 하나가 6개 소스 테이블 변환을 모두 포함:

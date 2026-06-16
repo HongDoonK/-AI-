@@ -6,6 +6,13 @@ function hasValue(value) {
   return value !== null && value !== undefined && value !== '';
 }
 
+function splitRegionNames(value) {
+  return String(value || '')
+    .split(/[,\s/|]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function checkAgeGap(profile, policy) {
   if (!hasValue(profile.age)) return null;
   const age = Number(profile.age);
@@ -36,7 +43,9 @@ function checkRegionGap(profile, policy) {
     };
   }
   const policySigungu = (policy.region_sigungu || '').trim();
-  if (policySigungu && hasValue(profile.region_sigungu) && profile.region_sigungu !== policySigungu) {
+  if (policySigungu && policySigungu !== '전국' && hasValue(profile.region_sigungu)) {
+    const allowedSigungu = splitRegionNames(policySigungu);
+    if (allowedSigungu.includes(profile.region_sigungu)) return null;
     return {
       label: '지역',
       detail: `${policySido} ${policySigungu} 거주자 대상 — 현재 등록 지역은 ${profile.region_sido} ${profile.region_sigungu}`,

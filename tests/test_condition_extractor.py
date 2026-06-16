@@ -2,7 +2,8 @@
 import os
 import unittest
 
-os.environ["USE_OPENAI_LLM"] = "0"
+os.environ["LLM_PROVIDER"] = "none"  # ADR-002 §D2
+os.environ["USE_OPENAI_LLM"] = "0"   # 레거시 호환
 
 from ai.condition_extractor import extract_user_condition, has_condition_signal
 

@@ -5,9 +5,19 @@ pydantic==2.13.4
 pandas==2.3.3
 numpy==2.2.6
 scikit-learn==1.7.2
-openai==2.41.1
 python-dotenv==1.2.2
 tqdm==4.68.2
+
+# LLM provider (ADR-002 §D2). LLM_PROVIDER=none이면 없어도 규칙 fallback으로 동작.
+# hf 공급자(HF Inference)에 필요. sentence-transformers가 이미 의존하지만 명시 고정.
+huggingface_hub==1.14.0
+# local 공급자(오프라인 transformers 추론)에 필요. 무겁기 때문에 선택 설치.
+# accelerate는 device_map="auto" 모델 로딩에 필요(없으면 local 경로가 LLMUnavailable→규칙 fallback).
+#transformers==5.8.1
+#torch
+#accelerate
+# (레거시) LLM_PROVIDER=openai일 때만 필요. 기본 경로에서는 불필요.
+#openai==2.41.1
 
 # Optional: FAISS 임베딩 검색 (USE_FAISS=0이면 없어도 동작)
 # 무거운 의존성이므로 CI에서는 requirements-ci.txt를 사용

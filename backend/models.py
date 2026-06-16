@@ -30,6 +30,9 @@ class RecommendRequest(BaseModel):
         description="사용자가 자연어로 입력한 자신의 상황",
         examples=["서울 사는 24살 대학생인데 월세 지원 받을 수 있는 정책 있어?"],
     )
+    # D1(ADR-002): Hero 추천을 대화 세션에 시드해 채팅과 공유 (둘 다 선택, additive)
+    user_id:    str | None = Field(None, description="저장된 사용자 프로필 ID (추천 세션 시드용)")
+    session_id: str | None = Field(None, description="대화 세션 ID (있으면 그 세션에 추천을 시드)")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -140,6 +143,15 @@ class RecommendResponse(BaseModel):
     message:         str                 = Field(
         default="",
         description="추천 결과 대신 사용자에게 보여줄 안내 메시지",
+    )
+    # D1(ADR-002): 채팅과 공유하는 단일 추천 세션 (additive — 기존 소비자 영향 없음)
+    session_id:      str | None           = Field(
+        None,
+        description="대화 세션 ID — 채팅(/agent/converse)이 이 세션의 추천 목록을 이어받는다",
+    )
+    cards:           list[dict]           = Field(
+        default_factory=list,
+        description="채팅과 공유하는 추천 카드 ref (rank/doc_id/source_table/source_id/title/domain)",
     )
 
 

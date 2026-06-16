@@ -108,11 +108,25 @@ def recommend(request: RecommendRequest):
         region = user_condition.get("region", "")
         centers = get_centers_by_region(region) if region else []
 
+        # D1(ADR-002): Hero 추천을 대화 세션의 단일 추천 목록으로 시드한다(채팅과 공유).
+        # 채팅(/agent/converse)이 같은 session_id로 이 목록을 이어받아 "정책 N"을 해석한다.
+        cards = [_policy_ref(rec, index + 1) for index, rec in enumerate(recommendations[:5])]
+        session = conversation_store.get_or_create_session(request.session_id, request.user_id)
+        session_id = session["session_id"]
+        conversation_store.update_session(
+            session_id,
+            last_recommendations=cards,
+            last_intent=RECOMMEND,
+            clear_selection=True,
+        )
+
         return {
             "user_condition": user_condition,
             "recommendations": recommendations,
             "centers": centers,
             "message": message,
+            "session_id": session_id,
+            "cards": cards,
         }
     except Exception as e:
         print(f"/recommend 처리 중 오류: {e}")
