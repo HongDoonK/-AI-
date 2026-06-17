@@ -39,3 +39,8 @@ tests/fixtures/
 docs/AI_HANDOFF.md
 reports/
 /MEMORY.md
+
+# 에이전트 역할 분리 검증 과정 산출물 — 로컬 전용 (검증 미완/blocked)
+docs/claude-code-agent-separation-verification-prompt.md
+docs/claude-code-agent-separation-verification-report.md
+tools/run_claude_agent_separation_verification.ps1

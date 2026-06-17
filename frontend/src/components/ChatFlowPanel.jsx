@@ -4,10 +4,13 @@ import { actionToMessage, sendConverse } from '../converseClient.js';
 
 const GREETING = {
   role: 'assistant',
-  text: '어떤 상황인지 한 문장으로 알려 주세요. 예: "서울 26살 직장인인데 목돈 마련하고 싶어"',
+  text: '왼쪽 "나의 상황 입력"에서 추천받은 정책을 골라 상담을 시작하세요. 예: "정책 2 서류 알려줘", "선택한 정책 신청 방법 알려줘"',
   actions: [],
   cards: [],
 };
+
+// 추천 카드(클릭 선택)를 첨부하는 intent: Hero 시드 추천 + 안내(추천 요청/선택 유도)
+const CARD_INTENTS = ['recommend', 'need_recommendation', 'need_select'];
 
 function normalizeSeedPolicy(policy = {}) {
   const title = policy.policy_name || policy.title || '정책명 확인 필요';
@@ -27,8 +30,8 @@ function buildAssistantMessage(res) {
     role: 'assistant',
     text: res.reply,
     actions: res.suggested_actions || [],
-    // 추천 턴에만 카드 목록 첨부 — 클릭 선택 가능
-    cards: res.intent === 'recommend' ? (res.cards || []) : [],
+    // 추천 카드 첨부 — Hero 시드 추천/선택 유도/추천 안내 시 클릭 선택 가능
+    cards: CARD_INTENTS.includes(res.intent) ? (res.cards || []) : [],
   };
 }
 
@@ -271,7 +274,7 @@ export default function ChatFlowPanel({ baseUrl, userId, seededPolicy, seededRec
         <input
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          placeholder='예: "정책 2 신청할래" 또는 "얼마나 받을 수 있어?"'
+          placeholder='예: "정책 2 서류 알려줘" 또는 "선택한 정책 신청 방법 알려줘"'
         />
         <button className="primary-button icon-button" type="submit" disabled={loading || !input.trim()}>
           <Send size={17} />

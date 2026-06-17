@@ -1,14 +1,19 @@
 """대화형 신청 도우미 오케스트레이터 (ConverseAgent).
 
 자유 발화 한 턴을 받아 (1) 의도를 분류하고 (2) 기존 능력
-—recommender · apply_agent · benefit_estimator · policy_chat_agent—
+—apply_agent · benefit_estimator · policy_chat_agent—
 중 하나로 디스패치한 뒤 (3) 대화체 응답 + 후속 액션칩으로 직렬화한다.
+
+하드 분리(에이전트 역할 분리): 채팅은 **새 정책 추천을 생성하지 않는다.** 추천은 오직
+Hero "나의 상황 입력"(`/recommend`)이 담당하고, 채팅은 그 세션이 시드한 정책을 선택·상담·
+신청 준비만 한다. 추천 요청 발화는 NEED_RECOMMENDATION으로 분류되어 Hero로 안내된다.
 
 DB에 의존하지 않는다. 세션 상태(selected_policy, last_recommendations)는
 인자로 받고, 갱신된 상태를 응답에 실어 반환한다. 영속화는 호출 측
 (backend/main.py + conversation_store)이 담당한다.
 
-설계: docs/ADR-001-conversational-apply-flow.md
+설계: docs/ADR-001-conversational-apply-flow.md,
+      docs/superpowers/specs/2026-06-17-agent-role-separation-design.md
 """
 from __future__ import annotations
 
@@ -23,14 +28,13 @@ from ai.intent_router import (
     BENEFIT,
     DOCS,
     ELIGIBILITY,
-    RECOMMEND,
+    NEED_RECOMMENDATION,
     SELECT,
     UNCLEAR,
     classify_intent,
     detect_selection,
 )
 from ai.policy_chat_agent import PolicyChatAgent
-from ai.recommender import recommend_policy
 
 _NEEDS_SELECT_INTENTS = {DOCS, BENEFIT, ELIGIBILITY, APPLY_HOW}
 _SELECTION_APPLY_DOC_SIGNALS = [
@@ -111,8 +115,8 @@ class ConverseAgent:
         last_recommendations = last_recommendations or []
         intent = classify_intent(message, has_selected=bool(selected_policy))
 
-        if intent == RECOMMEND:
-            return self._handle_recommend(message)
+        if intent == NEED_RECOMMENDATION:
+            return self._guide_to_recommend(last_recommendations)
         if intent == SELECT:
             return self._handle_select(message, selected_policy, last_recommendations, profile)
         if intent in _NEEDS_SELECT_INTENTS:
@@ -123,34 +127,32 @@ class ConverseAgent:
         return self._handle_unclear(selected_policy, last_recommendations)
 
     # ── 의도별 핸들러 ────────────────────────────────────────────────
-    def _handle_recommend(self, message: str) -> dict[str, Any]:
-        result = recommend_policy(message)
-        recs = (result.get("recommendations") or [])[:5]
-        if not recs:
-            return {
-                "intent": RECOMMEND,
-                "reply": result.get("message") or "조건을 더 알려주시면 정책을 찾아드릴게요.",
-                "cards": [],
-                "selected_policy": None,
-                "last_recommendations": [],
-                "suggested_actions": [],
-            }
-        cards = [_policy_ref(rec, i + 1) for i, rec in enumerate(recs)]
-        lines = ["회원님 조건 기준으로 신청 가능한 정책 {}개를 찾았어요.".format(len(cards))]
-        for card in cards:
-            domain = f" [{card['domain']}]" if card["domain"] else ""
-            lines.append(f"  {card['rank']}. {card['title']}{domain}")
-        lines.append("\n번호로 정책을 골라 주세요. 예: \"정책 3 신청할래\"")
-        return {
-            "intent": RECOMMEND,
-            "reply": "\n".join(lines),
-            "cards": cards,
-            "selected_policy": None,  # 새 추천 시 이전 선택 해제
-            "last_recommendations": cards,
-            "suggested_actions": [
+    def _guide_to_recommend(self, last_recommendations: list[dict[str, Any]]) -> dict[str, Any]:
+        """채팅 추천 요청 → Hero로 안내(하드 분리). 새 추천을 생성하지 않는다.
+
+        세션 상태(selected_policy/last_recommendations)는 건드리지 않는 read-only 응답이다.
+        """
+        if last_recommendations:
+            reply = (
+                "새 정책 추천은 왼쪽 '나의 상황 입력'에서 받을 수 있어요. "
+                "아래 추천된 정책 중에서 골라 상담을 이어가 주세요."
+            )
+            actions = [
                 _action(f"{card['rank']}번 선택", intent=SELECT, ordinal=card["rank"])
-                for card in cards[:3]
-            ],
+                for card in last_recommendations[:3]
+            ]
+        else:
+            reply = (
+                "아직 추천된 정책이 없어요. 왼쪽 '나의 상황 입력'에 상황을 적어 정책을 먼저 "
+                "추천받아 주세요. 이 채팅은 고른 정책의 서류·지원금·신청 준비를 도와드려요."
+            )
+            actions = []
+        return {
+            "intent": NEED_RECOMMENDATION,
+            "reply": reply,
+            "cards": last_recommendations,
+            "selected_policy": None,
+            "suggested_actions": actions,
         }
 
     def _handle_select(

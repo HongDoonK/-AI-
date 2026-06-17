@@ -23,17 +23,28 @@ class ConverseAgentTest(unittest.TestCase):
     def setUpClass(cls):
         cls.agent = ConverseAgent()
 
-    def test_recommend_returns_cards_and_resets_selection(self):
+    def test_chat_recommendation_attempt_returns_guidance_with_existing_cards(self):
+        # 하드 분리: 채팅 추천 요청은 새 추천을 생성하지 않고, Hero로 안내 + 기존 시드 카드 재노출
         result = self.agent.respond(
-            message="서울 무주택 청년인데 월세 지원 정책 없나?",
-            selected_policy=P001,
+            message="다른 정책도 추천해줘",
+            selected_policy=None,
+            last_recommendations=[P001],
+            profile=None,
+        )
+        self.assertEqual(result["intent"], "need_recommendation")
+        self.assertIn("나의 상황 입력", result["reply"])
+        self.assertEqual(result["cards"], [P001], "새 목록이 아니라 기존 시드 그대로여야 함")
+
+    def test_chat_recommendation_attempt_without_cards_points_to_hero(self):
+        result = self.agent.respond(
+            message="정책 찾아줘",
+            selected_policy=None,
             last_recommendations=[],
             profile=None,
         )
-        self.assertEqual(result["intent"], "recommend")
-        self.assertTrue(result["cards"], "추천 카드가 비어 있으면 안 됨")
-        self.assertIsNone(result["selected_policy"], "추천 시 이전 선택은 해제되어야 함")
-        self.assertEqual(result["last_recommendations"], result["cards"])
+        self.assertEqual(result["intent"], "need_recommendation")
+        self.assertIn("나의 상황 입력", result["reply"])
+        self.assertEqual(result["cards"], [])
 
     def test_select_by_ordinal_sets_policy(self):
         result = self.agent.respond(

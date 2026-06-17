@@ -36,13 +36,14 @@ class ConverseApiSmokeTest(unittest.TestCase):
         return self.client.post("/agent/converse", json=body)
 
     def test_full_recommend_select_benefit_roundtrip(self):
-        # 턴 1: 추천
-        r1 = self._say("서울 무주택 청년인데 월세 지원 정책 없나?")
-        self.assertEqual(r1.status_code, 200)
-        body1 = r1.json()
-        session_id = body1["session_id"]
-        self.assertEqual(body1["intent"], "recommend")
-        self.assertTrue(body1["cards"])
+        # 턴 1: 추천은 Hero(/recommend)가 전담 — 대화 세션을 시드 (하드 분리)
+        rec = self.client.post(
+            "/recommend", json={"user_input": "서울 무주택 청년인데 월세 지원 정책 없나?"}
+        )
+        self.assertEqual(rec.status_code, 200)
+        rec_body = rec.json()
+        session_id = rec_body["session_id"]
+        self.assertTrue(rec_body["cards"])
 
         # 턴 2: 같은 세션에서 1번 신청 의사 → 서류 안내와 선택 정책 영속화
         r2 = self._say("정책 1 신청할래", session_id=session_id)
@@ -57,10 +58,28 @@ class ConverseApiSmokeTest(unittest.TestCase):
         self.assertEqual(body3["intent"], "benefit")
         self.assertIn("benefit", body3)
 
-        # 세션 히스토리 복원
+        # 세션 히스토리 복원 (converse 2턴 = user/assistant × 2)
         history = self.client.get(f"/agent/converse/{session_id}")
         self.assertEqual(history.status_code, 200)
-        self.assertGreaterEqual(len(history.json()["turns"]), 6)  # user/assistant × 3턴
+        self.assertGreaterEqual(len(history.json()["turns"]), 4)
+
+    def test_chat_recommendation_request_does_not_create_or_overwrite_list(self):
+        # 하드 분리: 채팅 추천 요청은 새 목록을 만들지 않고 세션 추천 목록도 덮어쓰지 않는다
+        rec = self.client.post("/recommend", json={"user_input": "서울 무주택 청년 월세 지원"})
+        session_id = rec.json()["session_id"]
+        seeded = rec.json()["cards"]
+        self.assertTrue(seeded)
+
+        chat = self._say("다른 정책 추천해줘", session_id=session_id)
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["intent"], "need_recommendation")
+
+        session = self.client.get(f"/agent/converse/{session_id}").json()["session"]
+        self.assertEqual(
+            [c["doc_id"] for c in session["last_recommendations"]],
+            [c["doc_id"] for c in seeded],
+            "채팅 추천 요청 후에도 Hero가 시드한 목록이 보존되어야 함",
+        )
 
     def test_seeded_policy_empty_message_selects_and_persists_session(self):
         response = self.client.post(

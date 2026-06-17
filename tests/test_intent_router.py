@@ -10,7 +10,7 @@ from ai.intent_router import (
     BENEFIT,
     DOCS,
     ELIGIBILITY,
-    RECOMMEND,
+    NEED_RECOMMENDATION,
     SELECT,
     UNCLEAR,
     classify_intent,
@@ -35,8 +35,19 @@ class DetectSelectionTest(unittest.TestCase):
 
 
 class ClassifyIntentTest(unittest.TestCase):
-    def test_recommend_without_selection(self):
-        self.assertEqual(classify_intent("서울 26살 목돈 마련 정책 없나?", has_selected=False), RECOMMEND)
+    def test_recommendation_request_routes_to_guidance(self):
+        # 하드 분리: 채팅 추천 요청은 RECOMMEND가 아니라 NEED_RECOMMENDATION(Hero 안내)
+        self.assertEqual(
+            classify_intent("서울 26살 목돈 마련 정책 없나?", has_selected=False),
+            NEED_RECOMMENDATION,
+        )
+        self.assertEqual(classify_intent("다른 정책 추천해줘", has_selected=True), NEED_RECOMMENDATION)
+
+    def test_selected_policy_intent_beats_recommend_signal(self):
+        # R1: 선택 정책이 있으면 '찾아줘'가 붙어도 상담 의도가 우선 (추천 안내로 새지 않음)
+        self.assertEqual(classify_intent("지원금 찾아줘", has_selected=True), BENEFIT)
+        self.assertEqual(classify_intent("서류 찾아줘", has_selected=True), DOCS)
+        self.assertEqual(classify_intent("신청 방법 찾아줘", has_selected=True), APPLY_HOW)
 
     def test_select_takes_priority(self):
         self.assertEqual(classify_intent("정책 2 신청할래", has_selected=True), SELECT)
