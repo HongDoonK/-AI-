@@ -250,6 +250,8 @@ def _parse_age_bounds(*values) -> tuple[int | None, int | None]:
     return numbers[0], numbers[0]
 
 
+
+
 def _region_from_address(value) -> str:
     text = _clean(value)
     if not text or text in {"-", "전국"}:
@@ -405,6 +407,76 @@ def rebuild_search_documents():
                 "raw_ref": source_id,
                 "collected_at": item.get("last_mod_date"),
             })
+            saved += 1
+
+    if _table_exists(cursor, "welfare_central"):
+        welfare_rows = cursor.execute(
+            "SELECT * FROM welfare_central"
+        ).fetchall()
+
+        for row in welfare_rows:
+            item = dict(row)
+
+            source_id = _clean(item.get("service_id"))
+
+            if not source_id:
+                print("⚠️ service_id가 없는 welfare_central 행을 건너뜁니다.")
+                continue
+
+            summary = _join_parts(
+                item.get("summary"),
+                item.get("detail_summary"),
+                item.get("support_content"),
+            )
+
+            target = _join_parts(
+                item.get("life_cycle"),
+                item.get("target_group"),
+                item.get("target_detail"),
+                item.get("selection_criteria"),
+            )
+
+            search_text = _clean(item.get("search_text"))
+
+            if not search_text:
+                search_text = _join_parts(
+                    item.get("service_name"),
+                    item.get("interest_theme"),
+                    summary,
+                    target,
+                    item.get("application_method"),
+                    item.get("ministry"),
+                    item.get("department"),
+                    item.get("responsible_agency"),
+                )
+
+            _insert_search_document(cursor, {
+                "doc_id": f"welfare_central:{source_id}",
+                "source_table": "welfare_central",
+                "source_id": source_id,
+                "domain": "welfare",
+                "title": item.get("service_name"),
+                "summary": summary,
+                "region_name": "전국",
+                "region_sido": "전국",
+                "region_sigungu": "",
+                "target": target,
+                "min_age": None,
+                "max_age": None,
+                "employment_status": "",
+                "status": item.get("life_cycle"),
+                "apply_start_date": "",
+                "apply_end_date": "",
+                "url": (
+                    item.get("service_url")
+                    or item.get("homepage")
+                    or ""
+                ),
+                "search_text": search_text,
+                "raw_ref": source_id,
+                "collected_at": item.get("imported_at"),
+            })
+
             saved += 1
 
     if _table_exists(cursor, "hrd_trainings"):
