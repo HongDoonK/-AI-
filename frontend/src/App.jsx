@@ -6,6 +6,7 @@ import {
   Calculator,
   CheckCircle2,
   ClipboardList,
+  Star,
   ExternalLink,
   Loader2,
   LogIn,
@@ -34,6 +35,7 @@ const USER_URL = `${API_BASE_URL}/user`;
 const CHAT_URL = `${API_BASE_URL}/chat`;
 const PROFILE_STORAGE_KEY = 'youth-policy-user-profile';
 const PREP_STORAGE_KEY = 'youth-policy-prep-checks';
+const SAVED_POLICY_STORAGE_KEY = 'youth-policy-saved-policies';
 const NO_CONDITION_MESSAGE =
   '조건이 부족해서 정책을 추천할 수 없습니다. 나이, 성별, 지역, 취업 상태 또는 관심 분야를 입력해주세요.';
 
@@ -530,7 +532,35 @@ function PreparationBoard({ policy, checkedItems, onToggle }) {
   );
 }
 
-function PolicyCard({ policy, index, onChat, onPrepare }) {
+function SavedPolicyPanel({ savedPolicies, onChat, onRemove }) {
+  if (!Array.isArray(savedPolicies) || savedPolicies.length === 0) return null;
+  return (
+    <section className="panel">
+      <h2><Star size={19} /> 내 정책함 <span className="count-badge">{savedPolicies.length}</span></h2>
+      <div className="saved-policy-list">
+        {savedPolicies.map((policy, idx) => (
+          <article className="report-card" key={`${policyKey(policy)}-${idx}`}>
+            <div className="report-card-head">
+              <span className="rank-chip">{idx + 1}</span>
+              <strong>{displayValue(policy.policy_name, '정책명 확인 필요')}</strong>
+            </div>
+            <p className="report-meta">신청 기간: {displayValue(policy.application_period)}</p>
+            <div className="policy-actions">
+              <button className="ghost-button" type="button" onClick={() => onChat(policy)}>
+                <MessageCircle size={16} /> 상담
+              </button>
+              <button className="ghost-button" type="button" onClick={() => onRemove(policy)}>
+                <Star size={16} /> 빼기
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PolicyCard({ policy, index, onChat, onPrepare, onToggleSave, isSaved }) {
   const checklist = Array.isArray(policy.checklist) ? policy.checklist : [];
   const url = policy.application_url || policy.url || policy.ref_url;
   const badges = Array.isArray(policy.match_badges) ? policy.match_badges.filter(Boolean) : [];
@@ -596,6 +626,13 @@ function PolicyCard({ policy, index, onChat, onPrepare }) {
         </section>
       )}
       <div className="policy-actions">
+        <button
+          className={isSaved ? 'primary-button' : 'ghost-button'}
+          type="button"
+          onClick={() => onToggleSave(policy)}
+        >
+          <Star size={16} /> {isSaved ? '정책함에서 빼기' : '정책함에 담기'}
+        </button>
         <button className="ghost-button" type="button" onClick={() => onPrepare(policy)}><ClipboardList size={16} /> 준비 체크 시작</button>
         <button className="ghost-button" type="button" onClick={() => onChat(policy)}><MessageCircle size={16} /> 정책 상담하기</button>
         {url && <a className="link-button" href={url} target="_blank" rel="noreferrer">신청/참고 링크 열기 <ExternalLink size={15} /></a>}
@@ -670,6 +707,18 @@ export default function App() {
       return {};
     }
   });
+  const [savedPolicies, setSavedPolicies] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(SAVED_POLICY_STORAGE_KEY) || '[]');
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  });
+  const savedPolicyKeys = useMemo(
+    () => new Set(savedPolicies.map((policy) => policyKey(policy))),
+    [savedPolicies],
+  );
 
   const data = useMemo(() => normalizeResult(result), [result]);
   const activePolicyKey = activePolicy ? policyKey(activePolicy) : '';
@@ -679,6 +728,69 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PREP_STORAGE_KEY, JSON.stringify(checkedPrepByPolicy));
   }, [checkedPrepByPolicy]);
+  useEffect(() => {
+    localStorage.setItem(SAVED_POLICY_STORAGE_KEY, JSON.stringify(savedPolicies));
+  }, [savedPolicies]);
+
+  // 로그인된 사용자라면 서버에 저장된 정책함을 불러와 동기화한다.
+  useEffect(() => {
+    const userId = profile?.user_id;
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${USER_URL}/${userId}/policies`);
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!cancelled && Array.isArray(payload.policies)) {
+          setSavedPolicies(payload.policies);
+        }
+      } catch (error) {
+        console.error('정책함 불러오기 실패:', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.user_id]);
+
+  async function toggleSavedPolicy(policy) {
+    const key = policyKey(policy);
+    const userId = profile?.user_id;
+    const alreadySaved = savedPolicies.some((item) => policyKey(item) === key);
+
+    // 비로그인 상태에서는 로컬(localStorage)에만 보관한다.
+    if (!userId) {
+      setSavedPolicies((prev) =>
+        alreadySaved ? prev.filter((item) => policyKey(item) !== key) : [...prev, policy],
+      );
+      return;
+    }
+
+    // 낙관적 업데이트 후 서버 응답으로 확정한다.
+    const previous = savedPolicies;
+    setSavedPolicies((prev) =>
+      alreadySaved ? prev.filter((item) => policyKey(item) !== key) : [...prev, policy],
+    );
+    try {
+      const response = alreadySaved
+        ? await fetch(`${USER_URL}/${userId}/policies?policy_key=${encodeURIComponent(key)}`, {
+            method: 'DELETE',
+          })
+        : await fetch(`${USER_URL}/${userId}/policies`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ policy }),
+          });
+      if (!response.ok) throw new Error(`정책함 동기화 실패: ${response.status}`);
+      const payload = await response.json();
+      if (Array.isArray(payload.policies)) setSavedPolicies(payload.policies);
+    } catch (error) {
+      console.error(error);
+      setSavedPolicies(previous); // 실패 시 롤백
+      setErrorMessage('정책함을 서버에 저장하지 못했습니다. 백엔드 서버 상태를 확인해주세요.');
+    }
+  }
 
   async function handleLogin(profileInput) {
     setSavingProfile(true);
@@ -830,6 +942,11 @@ export default function App() {
       <section className="result-grid">
         <aside className="left-column">
           <LoginPanel profile={profile} onLogin={handleLogin} saving={savingProfile} />
+          <SavedPolicyPanel
+            savedPolicies={savedPolicies}
+            onChat={openPolicyChat}
+            onRemove={toggleSavedPolicy}
+          />
           <IncomeTaxCalculator />
           <ApplicationAgentPanel recommendations={data.recommendations} />
           <EligibilityGapPanel recommendations={data.recommendations} profile={profile} />
@@ -876,6 +993,8 @@ export default function App() {
                       index={index}
                       onChat={openPolicyChat}
                       onPrepare={openPreparationBoard}
+                      onToggleSave={toggleSavedPolicy}
+                      isSaved={savedPolicyKeys.has(policyKey(policy))}
                       key={`${policy.policy_name}-${index}`}
                     />
                   ))}

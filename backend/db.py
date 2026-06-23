@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import sys
@@ -139,6 +140,32 @@ def _ensure_search_documents_table(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)")
 
 
+def _ensure_saved_policies_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS saved_policies (
+            user_id     TEXT NOT NULL,
+            policy_key  TEXT NOT NULL,
+            policy_name TEXT,
+            policy_json TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now', 'localtime')),
+            PRIMARY KEY (user_id, policy_key)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_saved_policies_user ON saved_policies(user_id)"
+    )
+
+
+def policy_key(policy: dict) -> str:
+    """프론트엔드 policyKey()와 동일한 규칙으로 정책 고유 키를 만든다."""
+    doc_id = policy.get("doc_id")
+    if doc_id:
+        return str(doc_id)
+    source_table = policy.get("source_table") or "policy"
+    source_id = policy.get("source_id") or policy.get("policy_name") or "unknown"
+    return f"{source_table}:{source_id}"
+
+
 def create_tables():
     conn = get_connection()
     cursor = conn.cursor()
@@ -164,10 +191,11 @@ def create_tables():
 
     _ensure_users_table(cursor)
     _ensure_search_documents_table(cursor)
+    _ensure_saved_policies_table(cursor)
 
     conn.commit()
     conn.close()
-    print("DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents)")
+    print("DB 테이블 생성 완료 (policies, policies_processed, centers, users, search_documents, saved_policies)")
 
 
 def get_centers_by_region(region: str) -> list:
@@ -237,6 +265,62 @@ def get_user(user_id: str) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def save_policy_for_user(user_id: str, policy: dict) -> str:
+    """사용자의 정책함에 정책 1개를 담는다. 같은 정책이면 덮어쓴다(중복 방지)."""
+    key = policy_key(policy)
+    conn = get_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        """
+        INSERT INTO saved_policies (user_id, policy_key, policy_name, policy_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, policy_key) DO UPDATE SET
+            policy_name = excluded.policy_name,
+            policy_json = excluded.policy_json
+        """,
+        (user_id, key, policy.get("policy_name", ""), json.dumps(policy, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+    return key
+
+
+def get_saved_policies(user_id: str) -> list:
+    """사용자가 담아둔 정책 목록을 최신순으로 반환한다."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        "SELECT policy_json FROM saved_policies WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    policies = []
+    for row in rows:
+        try:
+            policies.append(json.loads(row["policy_json"]))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return policies
+
+
+def delete_saved_policy(user_id: str, key: str) -> bool:
+    """정책함에서 정책 1개를 뺀다. 실제로 삭제됐으면 True."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        "DELETE FROM saved_policies WHERE user_id = ? AND policy_key = ?",
+        (user_id, key),
+    )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 if __name__ == "__main__":

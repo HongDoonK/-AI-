@@ -12,12 +12,22 @@ except ModuleNotFoundError:
 
 from ai.policy_chat_agent import PolicyChatAgent
 from ai.recommender import recommend_policy
-from backend.db import create_tables, get_centers_by_region, get_user, save_user
+from backend.db import (
+    create_tables,
+    delete_saved_policy,
+    get_centers_by_region,
+    get_saved_policies,
+    get_user,
+    save_policy_for_user,
+    save_user,
+)
 from backend.models import (
     ChatRequest,
     ChatResponse,
     RecommendRequest,
     RecommendResponse,
+    SavedPoliciesResponse,
+    SavePolicyRequest,
     UserRequest,
     UserResponse,
 )
@@ -142,3 +152,32 @@ def read_user(user_id: str):
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
     return user
+
+
+@app.get("/user/{user_id}/policies", response_model=SavedPoliciesResponse)
+def list_saved_policies(user_id: str):
+    if get_user(user_id) is None:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    return {"policies": get_saved_policies(user_id)}
+
+
+@app.post("/user/{user_id}/policies", response_model=SavedPoliciesResponse)
+def add_saved_policy(user_id: str, request: SavePolicyRequest):
+    if get_user(user_id) is None:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    try:
+        save_policy_for_user(user_id, request.policy)
+        return {"policies": get_saved_policies(user_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"정책 저장 중 오류 발생: {str(e)}")
+
+
+@app.delete("/user/{user_id}/policies", response_model=SavedPoliciesResponse)
+def remove_saved_policy(user_id: str, policy_key: str):
+    if get_user(user_id) is None:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    try:
+        delete_saved_policy(user_id, policy_key)
+        return {"policies": get_saved_policies(user_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"정책 삭제 중 오류 발생: {str(e)}")
