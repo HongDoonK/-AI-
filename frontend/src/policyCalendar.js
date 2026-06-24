@@ -49,6 +49,58 @@ export function formatDeadlineLabel(daysLeft, status) {
   return `${daysLeft}일 남음`;
 }
 
+export function formatDdayLabel(daysLeft, status) {
+  if (status === 'needs_date_check' || daysLeft == null) return '날짜 미정';
+  if (status === 'expired' || daysLeft < 0) return `D+${Math.abs(daysLeft)}`;
+  return `D-${daysLeft}`;
+}
+
+export function groupEventsByDeadlineDate(events) {
+  const map = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!event?.deadlineAt) continue;
+    const list = map.get(event.deadlineAt) || [];
+    list.push(event);
+    map.set(event.deadlineAt, list);
+  }
+  return map;
+}
+
+export function buildMonthCalendarCells(viewYear, viewMonth, today = new Date()) {
+  const firstDay = new Date(viewYear, viewMonth, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const todayIso = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
+
+  const cells = [];
+  for (let index = 0; index < startOffset; index += 1) {
+    cells.push({ type: 'padding', key: `pad-${index}` });
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const iso = [
+      viewYear,
+      String(viewMonth + 1).padStart(2, '0'),
+      String(day).padStart(2, '0'),
+    ].join('-');
+    cells.push({
+      type: 'day',
+      key: iso,
+      day,
+      iso,
+      isToday: iso === todayIso,
+    });
+  }
+  return cells;
+}
+
+export function formatMonthTitle(viewYear, viewMonth) {
+  return `${viewYear}년 ${viewMonth + 1}월`;
+}
+
 export function buildIcsCalendar(events, calendarName = '충북 청년정책 마감 일정', settings = null) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const alarmRules = [
@@ -145,6 +197,77 @@ export function getDeadlineAlerts(events, settings, today = new Date()) {
   });
 }
 
+export const SENT_DEADLINE_ALERTS_KEY = 'youth-policy-sent-deadline-alerts';
+
+export function formatTodayKey(today = new Date()) {
+  return [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function readSentAlerts() {
+  if (typeof localStorage === 'undefined') return new Set();
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SENT_DEADLINE_ALERTS_KEY) || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSentAlerts(set) {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(SENT_DEADLINE_ALERTS_KEY, JSON.stringify([...set]));
+}
+
+export function buildAlertTrackingKey(alert, today = new Date()) {
+  return `${formatTodayKey(today)}:${alert.policyKey}:${alert.alertLabel}`;
+}
+
+export function wasAlertSent(alert, today = new Date()) {
+  return readSentAlerts().has(buildAlertTrackingKey(alert, today));
+}
+
+export function markAlertSent(alert, today = new Date()) {
+  const sent = readSentAlerts();
+  sent.add(buildAlertTrackingKey(alert, today));
+  writeSentAlerts(sent);
+}
+
+export function clearSentDeadlineAlerts() {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(SENT_DEADLINE_ALERTS_KEY);
+}
+
+export function processScheduledDeadlineNotifications(events, settings, today = new Date()) {
+  if (!settings?.enabled) {
+    return { sent: 0, permission: 'disabled' };
+  }
+  if (typeof Notification === 'undefined') {
+    return { sent: 0, permission: 'unsupported' };
+  }
+  if (Notification.permission !== 'granted') {
+    return { sent: 0, permission: Notification.permission };
+  }
+
+  const alerts = getDeadlineAlerts(events, settings, today);
+  let sent = 0;
+  for (const alert of alerts) {
+    if (wasAlertSent(alert, today)) continue;
+    if (showDeadlineNotification(alert)) {
+      markAlertSent(alert, today);
+      sent += 1;
+    }
+  }
+
+  return {
+    sent,
+    permission: 'granted',
+    totalToday: alerts.length,
+  };
+}
+
 export function buildDemoAlarmPolicies(today = new Date()) {
   const base = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
 
@@ -188,7 +311,7 @@ export function showDeadlineNotification(alert) {
   return true;
 }
 
-export async function runDemoAlarmTest(events, settings) {
+export async function runDemoAlarmTest(events, settings, today = new Date()) {
   const permission = await requestNotificationPermission();
   if (permission === 'unsupported') {
     return { ok: false, message: '이 브라우저는 알림을 지원하지 않습니다.' };
@@ -197,7 +320,7 @@ export async function runDemoAlarmTest(events, settings) {
     return { ok: false, message: '브라우저 설정에서 알림을 허용해 주세요.' };
   }
 
-  const alerts = getDeadlineAlerts(events, settings);
+  const alerts = getDeadlineAlerts(events, settings, today);
   if (alerts.length === 0) {
     return { ok: false, message: '오늘 울릴 알림이 없습니다. 「시연용 마감 정책 추가」를 먼저 눌러 주세요.' };
   }
@@ -207,4 +330,15 @@ export async function runDemoAlarmTest(events, settings) {
   });
 
   return { ok: true, message: `${alerts.length}건의 알림을 보냈습니다.` };
+}
+
+export async function enableDeadlineNotifications(settings) {
+  const permission = await requestNotificationPermission();
+  if (permission === 'unsupported') {
+    return { ok: false, message: '이 브라우저는 알림을 지원하지 않습니다.' };
+  }
+  if (permission === 'denied') {
+    return { ok: false, message: '브라우저 설정에서 알림을 허용해 주세요.' };
+  }
+  return { ok: true, settings: { ...settings, enabled: true } };
 }

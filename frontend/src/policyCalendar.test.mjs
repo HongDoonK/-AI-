@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import {
   buildDemoAlarmPolicies,
+  buildAlertTrackingKey,
   buildIcsCalendar,
   buildSavedCalendarEvents,
   classifyDeadline,
   formatDeadlineLabel,
+  formatDdayLabel,
+  formatMonthTitle,
+  formatTodayKey,
   FREE_SAVED_LIMIT,
   getDeadlineAlerts,
+  groupEventsByDeadlineDate,
+  buildMonthCalendarCells,
   hasDemoAlarmPolicies,
   isDemoAlarmPolicy,
 } from './policyCalendar.js';
@@ -24,6 +30,21 @@ assert.equal(events.length, 3);
 assert.equal(events[0].policyName, 'Soon');
 assert.equal(events[0].deadlineStatus, 'urgent');
 assert.equal(formatDeadlineLabel(events[0].daysLeft, events[0].deadlineStatus), '4일 남음');
+assert.equal(formatDdayLabel(events[0].daysLeft, events[0].deadlineStatus), 'D-4');
+assert.equal(formatDdayLabel(0, 'urgent'), 'D-0');
+assert.equal(formatDdayLabel(-2, 'expired'), 'D+2');
+
+const grouped = groupEventsByDeadlineDate(events);
+assert.equal(grouped.get('2026-06-12')?.length, 1);
+
+const cells = buildMonthCalendarCells(2026, 5);
+assert.ok(cells.some((cell) => cell.type === 'day' && cell.day === 12));
+assert.equal(formatMonthTitle(2026, 5), '2026년 6월');
+assert.equal(formatTodayKey(new Date(Date.UTC(2026, 5, 21))), '2026-06-21');
+assert.match(
+  buildAlertTrackingKey({ policyKey: 'demo-alarm-d0', alertLabel: '당일' }, new Date(Date.UTC(2026, 5, 21))),
+  /^2026-06-21:demo-alarm-d0:당일$/,
+);
 
 const open = classifyDeadline(new Date(Date.UTC(2026, 6, 1)), new Date(Date.UTC(2026, 5, 8)));
 assert.equal(open.status, 'open');

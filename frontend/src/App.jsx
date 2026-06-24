@@ -7,6 +7,8 @@ import {
   Calculator,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   ExternalLink,
   Home,
@@ -26,13 +28,21 @@ import { getScoreMood } from './scoreMood.js';
 import {
   buildDemoAlarmPolicies,
   buildSavedCalendarEvents,
+  clearSentDeadlineAlerts,
   defaultNotificationSettings,
   downloadIcsFile,
-  formatDeadlineLabel,
+  enableDeadlineNotifications,
+  formatDdayLabel,
+  formatMonthTitle,
+  formatTodayKey,
   FREE_SAVED_LIMIT,
+  buildMonthCalendarCells,
+  groupEventsByDeadlineDate,
   getDeadlineAlerts,
   hasDemoAlarmPolicies,
   isDemoAlarmPolicy,
+  processScheduledDeadlineNotifications,
+  requestNotificationPermission,
   runDemoAlarmTest,
 } from './policyCalendar.js';
 import {
@@ -46,6 +56,7 @@ import {
   getCompletionStats,
   togglePreparationItem,
 } from './prepTracker.js';
+import { useTodayTick } from './useTodayTick.js';
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
@@ -1126,6 +1137,110 @@ function DetailScreen({
   );
 }
 
+function SavedMonthCalendar({ events, today }) {
+  const initialMonth = useMemo(() => {
+    const firstDated = events.find((event) => event.deadlineAt);
+    if (firstDated?.deadlineAt) {
+      const [year, month] = firstDated.deadlineAt.split('-').map(Number);
+      return { year, month: month - 1 };
+    }
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  }, [events]);
+
+  const [viewYear, setViewYear] = useState(initialMonth.year);
+  const [viewMonth, setViewMonth] = useState(initialMonth.month);
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  useEffect(() => {
+    setViewYear(initialMonth.year);
+    setViewMonth(initialMonth.month);
+  }, [initialMonth.year, initialMonth.month]);
+
+  const eventsByDate = useMemo(() => groupEventsByDeadlineDate(events), [events]);
+  const cells = useMemo(() => buildMonthCalendarCells(viewYear, viewMonth, today), [viewYear, viewMonth, today]);
+  const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
+  const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) || [] : [];
+
+  function shiftMonth(delta) {
+    const next = new Date(viewYear, viewMonth + delta, 1);
+    setViewYear(next.getFullYear());
+    setViewMonth(next.getMonth());
+    setSelectedDate(null);
+  }
+
+  return (
+    <section className="saved-month-calendar" aria-label="마감 월간 캘린더">
+      <div className="saved-month-calendar-head">
+        <button type="button" className="round-button muted-button" onClick={() => shiftMonth(-1)} aria-label="이전 달">
+          <ChevronLeft size={18} />
+        </button>
+        <strong>{formatMonthTitle(viewYear, viewMonth)}</strong>
+        <button type="button" className="round-button muted-button" onClick={() => shiftMonth(1)} aria-label="다음 달">
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="saved-month-weekdays">
+        {weekdayLabels.map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+      </div>
+      <div className="saved-month-grid">
+        {cells.map((cell) => {
+          if (cell.type === 'padding') {
+            return <div className="saved-month-cell padding" key={cell.key} aria-hidden="true" />;
+          }
+          const dayEvents = eventsByDate.get(cell.iso) || [];
+          const isSelected = selectedDate === cell.iso;
+          return (
+            <button
+              type="button"
+              key={cell.key}
+              className={`saved-month-cell${cell.isToday ? ' today' : ''}${isSelected ? ' selected' : ''}${dayEvents.length ? ' has-events' : ''}`}
+              onClick={() => setSelectedDate(cell.iso)}
+              aria-label={`${cell.day}일, 마감 ${dayEvents.length}건`}
+            >
+              <span className="saved-month-day">{cell.day}</span>
+              <div className="saved-month-events">
+                {dayEvents.slice(0, 2).map((event) => (
+                  <span
+                    className={`saved-month-event ${event.deadlineStatus || 'open'}`}
+                    key={`${event.policyKey}-${cell.iso}`}
+                    title={event.policyName}
+                  >
+                    <em>{formatDdayLabel(event.daysLeft, event.deadlineStatus)}</em>
+                    <span>{event.policyName}</span>
+                  </span>
+                ))}
+                {dayEvents.length > 2 && (
+                  <span className="saved-month-more">+{dayEvents.length - 2}</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {selectedDate && (
+        <div className="saved-month-selected">
+          <p className="saved-month-selected-title">{selectedDate} 마감 일정</p>
+          {selectedEvents.length === 0 ? (
+            <p className="muted">이 날짜에 마감 정책이 없습니다.</p>
+          ) : (
+            <ul className="saved-month-selected-list">
+              {selectedEvents.map((event) => (
+                <li key={`${event.policyKey}-${selectedDate}`}>
+                  <strong>{formatDdayLabel(event.daysLeft, event.deadlineStatus)}</strong>
+                  <span>{event.policyName}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SavedScreen({
   savedPolicies,
   checkedPrepByPolicy,
@@ -1141,15 +1256,16 @@ function SavedScreen({
   onAddDemoAlarmPolicies,
   onClearDemoAlarm,
   onNotify,
+  calendarEvents,
+  today,
 }) {
   const [savedTab, setSavedTab] = useState('list');
   const [alarmTestMessage, setAlarmTestMessage] = useState('');
-  const calendarEvents = useMemo(() => buildSavedCalendarEvents(savedPolicies), [savedPolicies]);
   const urgentCount = calendarEvents.filter((event) => event.deadlineStatus === 'urgent').length;
   const demoAlarmActive = useMemo(() => hasDemoAlarmPolicies(savedPolicies), [savedPolicies]);
   const todayAlerts = useMemo(
-    () => getDeadlineAlerts(calendarEvents, notificationSettings),
-    [calendarEvents, notificationSettings],
+    () => getDeadlineAlerts(calendarEvents, notificationSettings, today),
+    [calendarEvents, notificationSettings, today],
   );
   const isPro = planTier === 'pro';
 
@@ -1159,7 +1275,7 @@ function SavedScreen({
   }
 
   async function handleAlarmTest() {
-    const result = await runDemoAlarmTest(calendarEvents, notificationSettings);
+    const result = await runDemoAlarmTest(calendarEvents, notificationSettings, today);
     setAlarmTestMessage(result.message);
     if (result.ok) onNotify?.(result.message);
   }
@@ -1171,7 +1287,17 @@ function SavedScreen({
 
   function toggleNotification(enabled) {
     if (!isPro) return;
-    onNotificationChange({ ...notificationSettings, enabled });
+    if (!enabled) {
+      onNotificationChange({ ...notificationSettings, enabled: false });
+      return;
+    }
+    enableDeadlineNotifications(notificationSettings).then((result) => {
+      if (!result.ok) {
+        window.alert(result.message);
+        return;
+      }
+      onNotificationChange({ ...notificationSettings, enabled: true });
+    });
   }
 
   return (
@@ -1210,12 +1336,15 @@ function SavedScreen({
 
       <div className="saved-tab-bar" role="tablist" aria-label="정책함 보기">
         <button type="button" className={savedTab === 'list' ? 'active' : ''} onClick={() => setSavedTab('list')}>목록</button>
+        <button type="button" className={savedTab === 'alerts' ? 'active' : ''} onClick={() => setSavedTab('alerts')}>
+          마감 알림{todayAlerts.length > 0 ? ` (${todayAlerts.length})` : ''}
+        </button>
         <button type="button" className={savedTab === 'calendar' ? 'active' : ''} onClick={() => setSavedTab('calendar')}>
-          마감 캘린더{urgentCount > 0 ? ` (${urgentCount})` : ''}
+          캘린더{urgentCount > 0 ? ` (${urgentCount})` : ''}
         </button>
       </div>
 
-      {savedTab === 'calendar' && (
+      {savedTab === 'alerts' && (
         <section className="saved-calendar-panel">
           <div className="saved-calendar-actions">
             <button
@@ -1246,7 +1375,9 @@ function SavedScreen({
             </div>
             {notificationSettings.enabled && (
               <>
-                <p className="saved-notification-copy">시연 모드: D-7 · D-3 · D-1 · 당일 알림 설정이 저장됩니다.</p>
+                <p className="saved-notification-copy">
+                  D-7 · D-3 · D-1 · 당일 알림이 오늘 해당되면 앱이 켜져 있을 때 자동 발송됩니다. (하루 1회)
+                </p>
                 {isPro && (
                   <div className="saved-alarm-demo">
                     <p className="saved-alarm-preview-title">
@@ -1284,22 +1415,35 @@ function SavedScreen({
             )}
           </div>
           {calendarEvents.length === 0 ? (
+            <EmptyAction copy="알림을 설정할 마감 정책이 없어요." actionLabel="추천 보러 가기" onAction={() => onNavigate(hasResult ? 'results' : 'home')} />
+          ) : (
+            <>
+              <h3 className="saved-calendar-subtitle">마감 일정 목록</h3>
+              <div className="saved-calendar-list">
+                {calendarEvents.map((event) => (
+                  <article className={`saved-calendar-item ${event.deadlineStatus || ''}`} key={event.policyKey}>
+                    <div className="saved-calendar-item-head">
+                      <span className={`status-chip ${event.deadlineStatus || 'needs_date_check'}`}>
+                        {formatDdayLabel(event.daysLeft, event.deadlineStatus)}
+                      </span>
+                      {event.deadlineAt && <time dateTime={event.deadlineAt}>{event.deadlineAt}</time>}
+                    </div>
+                    <h3>{event.policyName}</h3>
+                    <p>{event.applicationPeriod || '신청 기간 확인 필요'}</p>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {savedTab === 'calendar' && (
+        <section className="saved-calendar-panel">
+          {calendarEvents.length === 0 ? (
             <EmptyAction copy="캘린더에 표시할 정책이 없어요." actionLabel="추천 보러 가기" onAction={() => onNavigate(hasResult ? 'results' : 'home')} />
           ) : (
-            <div className="saved-calendar-list">
-              {calendarEvents.map((event) => (
-                <article className={`saved-calendar-item ${event.deadlineStatus || ''}`} key={event.policyKey}>
-                  <div className="saved-calendar-item-head">
-                    <span className={`status-chip ${event.deadlineStatus || 'needs_date_check'}`}>
-                      {formatDeadlineLabel(event.daysLeft, event.deadlineStatus)}
-                    </span>
-                    {event.deadlineAt && <time dateTime={event.deadlineAt}>{event.deadlineAt}</time>}
-                  </div>
-                  <h3>{event.policyName}</h3>
-                  <p>{event.applicationPeriod || '신청 기간 확인 필요'}</p>
-                </article>
-              ))}
-            </div>
+            <SavedMonthCalendar events={calendarEvents} today={today} />
           )}
         </section>
       )}
@@ -1323,7 +1467,7 @@ function SavedScreen({
                     <span className="saved-item-badge">준비 {stats.percent}%</span>
                     {calendarEvent && (
                       <span className={`saved-deadline-pill ${calendarEvent.deadlineStatus || ''}`}>
-                        {formatDeadlineLabel(calendarEvent.daysLeft, calendarEvent.deadlineStatus)}
+                        {formatDdayLabel(calendarEvent.daysLeft, calendarEvent.deadlineStatus)}
                       </span>
                     )}
                     <h3>{displayValue(policy.policy_name, '정책명 확인 필요')}</h3>
@@ -1498,6 +1642,12 @@ export default function App() {
   });
   const planTier = notificationSettings.plan_tier || 'free';
   const savedLimit = planTier === 'pro' ? 999 : FREE_SAVED_LIMIT;
+  const today = useTodayTick(60000);
+  const todayKey = formatTodayKey(today);
+  const savedCalendarEvents = useMemo(
+    () => buildSavedCalendarEvents(savedPolicies, today),
+    [savedPolicies, todayKey],
+  );
 
   const data = useMemo(() => normalizeResult(result), [result]);
   const activePolicyKey = activePolicy ? policyKey(activePolicy) : '';
@@ -1517,6 +1667,27 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notificationSettings));
   }, [notificationSettings]);
+
+  useEffect(() => {
+    if (planTier !== 'pro' || !notificationSettings.enabled || savedPolicies.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      const permission = await requestNotificationPermission();
+      if (cancelled || permission !== 'granted') return;
+      processScheduledDeadlineNotifications(savedCalendarEvents, notificationSettings, new Date());
+    };
+
+    run();
+    const intervalId = window.setInterval(run, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [planTier, notificationSettings, savedCalendarEvents, todayKey, savedPolicies.length]);
 
   useEffect(() => {
     if (!profile?.user_id) return;
@@ -1702,6 +1873,7 @@ export default function App() {
   function clearDemoAlarmDemo() {
     setSavedPolicies((prev) => prev.filter((policy) => !isDemoAlarmPolicy(policy)));
     setNotificationSettings((prev) => ({ ...prev, enabled: false }));
+    clearSentDeadlineAlerts();
     notify('알림 시연을 종료했어요.');
   }
 
@@ -1810,6 +1982,8 @@ export default function App() {
         onAddDemoAlarmPolicies={addDemoAlarmPolicies}
         onClearDemoAlarm={clearDemoAlarmDemo}
         onNotify={notify}
+        calendarEvents={savedCalendarEvents}
+        today={today}
       />
     ),
     prep: (
