@@ -2,8 +2,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:mobile": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview --host"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
