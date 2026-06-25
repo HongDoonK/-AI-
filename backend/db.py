@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import sys
@@ -165,6 +166,35 @@ def _ensure_search_documents_table(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source_table, source_id)")
 
 
+def _ensure_saved_policies_table(cursor):
+    """정책함(사용자별 저장 정책) 테이블 보장. 사용자 DB에 둔다."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS saved_policies (
+            user_id     TEXT NOT NULL,
+            policy_key  TEXT NOT NULL,
+            policy_name TEXT,
+            policy_json TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now', 'localtime')),
+            PRIMARY KEY (user_id, policy_key)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_saved_policies_user ON saved_policies(user_id)"
+    )
+
+
+def policy_key(policy: dict) -> str:
+    """추천 카드(정책 dict)의 안정적인 식별 키를 만든다.
+
+    프론트의 policyKey()와 동일한 규칙을 서버에서도 사용한다."""
+    doc_id = policy.get("doc_id")
+    if doc_id:
+        return str(doc_id)
+    source_table = policy.get("source_table") or "policy"
+    source_id = policy.get("source_id") or policy.get("policy_name") or "unknown"
+    return f"{source_table}:{source_id}"
+
+
 def _migrate_legacy_users(policy_conn, user_conn):
     """과거에 정책 DB(youth_policy.db) 안에 저장된 users 데이터를
     분리된 사용자 DB로 1회 이전한다. 원본 행은 보존한다."""
@@ -240,12 +270,14 @@ def create_tables():
     conn.commit()
 
     user_conn = get_user_connection()
-    _ensure_users_table(user_conn.cursor())
+    user_cursor = user_conn.cursor()
+    _ensure_users_table(user_cursor)
+    _ensure_saved_policies_table(user_cursor)
     user_conn.commit()
     _migrate_legacy_users(conn, user_conn)
     user_conn.close()
     conn.close()
-    print("DB 테이블 생성 완료 (정책 DB: policies, policies_processed, centers, search_documents / 사용자 DB: users)")
+    print("DB 테이블 생성 완료 (정책 DB: policies, policies_processed, centers, search_documents / 사용자 DB: users, saved_policies)")
 
 
 def get_centers_by_region(region: str) -> list:
@@ -316,6 +348,62 @@ def get_user(user_id: str) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def save_policy_for_user(user_id: str, policy: dict) -> str:
+    """사용자의 정책함에 정책을 저장한다. 같은 키면 갱신(업서트). 정책 키를 반환."""
+    key = policy_key(policy)
+    conn = get_user_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        """
+        INSERT INTO saved_policies (user_id, policy_key, policy_name, policy_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, policy_key) DO UPDATE SET
+            policy_name = excluded.policy_name,
+            policy_json = excluded.policy_json
+        """,
+        (user_id, key, policy.get("policy_name", ""), json.dumps(policy, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+    return key
+
+
+def get_saved_policies(user_id: str) -> list:
+    """사용자의 정책함 목록을 최신순으로 반환한다."""
+    conn = get_user_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        "SELECT policy_json FROM saved_policies WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    policies = []
+    for row in rows:
+        try:
+            policies.append(json.loads(row["policy_json"]))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return policies
+
+
+def delete_saved_policy(user_id: str, key: str) -> bool:
+    """정책함에서 정책을 삭제한다. 삭제되었으면 True."""
+    conn = get_user_connection()
+    cursor = conn.cursor()
+    _ensure_saved_policies_table(cursor)
+    cursor.execute(
+        "DELETE FROM saved_policies WHERE user_id = ? AND policy_key = ?",
+        (user_id, key),
+    )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 if __name__ == "__main__":

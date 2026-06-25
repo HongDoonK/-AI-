@@ -163,6 +163,19 @@ class UserRequest(BaseModel):
     employment_status: str | None = None
 
 
+class SavePolicyRequest(BaseModel):
+    """정책함 담기 요청 — 추천 카드(정책 dict)를 그대로 보낸다."""
+    policy: dict[str, Any] = Field(..., description="정책함에 담을 추천 정책 카드 전체")
+
+
+class SavedPoliciesResponse(BaseModel):
+    """정책함 목록 응답."""
+    policies: list[PolicyResult] = Field(
+        default_factory=list,
+        description="사용자가 담아둔 정책 목록 (최신순)",
+    )
+
+
 class UserResponse(BaseModel):
     user_id:           str
     age:               int | None = None
