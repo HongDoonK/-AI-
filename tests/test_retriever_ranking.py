@@ -207,6 +207,34 @@ class RetrieverRankingTest(unittest.TestCase):
         self.assertIn("welfare_central", doc_ids)
         self.assertIn("lgcv", doc_ids)
 
+    def test_sigungu_filter_excludes_other_sigungu_keeps_exact_and_national(self):
+        # 세부 시군구가 지정되면 exact 시군구 + region_name 포함 + 전국만 통과하고,
+        # 같은 시도(충북)라도 다른 시군구(충주시)는 통과하지 않는다.
+        exact = _row("exact", "policy_housing", "청주 청년 월세 지원", "청주 청년 월세 임대료 주거 지원")
+        exact["region_name"] = "충북 청주시"
+        exact["region_sido"] = "충북"
+        exact["region_sigungu"] = "청주시"
+        other = _row("other", "policy_housing", "충주 청년 월세 지원", "충주 청년 월세 임대료 주거 지원")
+        other["region_name"] = "충북 충주시"
+        other["region_sido"] = "충북"
+        other["region_sigungu"] = "충주시"
+        national = _row("national", "policy_housing", "전국 청년 월세 지원", "전국 청년 월세 임대료 주거 지원")
+        national["region_name"] = "전국"
+        national["region_sido"] = "전국"
+        national["region_sigungu"] = ""
+        df = pd.DataFrame([exact, other, national])
+
+        results = retrieve_top_k(
+            "충북 청주시 24세 청년 월세 지원",
+            {"age": 24, "region_sido": "충북", "region_sigungu": "청주시", "interest": "주거", "housing_status": "월세"},
+            df,
+            top_k=5,
+        )
+        doc_ids = {row["doc_id"] for row in results}
+        self.assertIn("exact", doc_ids)
+        self.assertIn("national", doc_ids)
+        self.assertNotIn("other", doc_ids)
+
     def test_startup_query_ranks_startup_before_general_finance(self):
         df = pd.DataFrame([
             _row("startup", "startup", "청년 창업 사업화 지원", "서울 예비창업자 창업 사업화 자금 지원"),

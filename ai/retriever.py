@@ -142,7 +142,9 @@ def _region_priority(
     priority = pd.Series([0] * len(df), index=df.index)
     priority[nationwide] = 1
 
-    if wanted_sido:
+    # 세부 시군구가 지정되지 않은 경우에만 같은 시도의 광역(시군구 미지정) 후보를 허용한다.
+    # 시군구가 지정되면 광역 후보는 통과시키지 않는다(아래 same_sigungu/전국만 통과).
+    if wanted_sido and not wanted_sigungu:
         same_sido = (
             sido_text.str.contains(re.escape(wanted_sido), case=False, na=False)
             | region_name_text.str.contains(re.escape(wanted_sido), case=False, na=False)
@@ -151,7 +153,12 @@ def _region_priority(
         priority[broad_sido] = priority[broad_sido].clip(lower=2)
 
     if wanted_sigungu:
-        same_sigungu = sigungu_text.str.contains(re.escape(wanted_sigungu), case=False, na=False)
+        # 세부 지역이 지정되면 정확한 시군구이거나 region_name에 시군구가 포함된 후보만
+        # 통과시킨다. 같은 시도라도 다른/빈 시군구는 전국(priority 1)이 아닌 한 제외된다.
+        same_sigungu = (
+            sigungu_text.str.contains(re.escape(wanted_sigungu), case=False, na=False)
+            | region_name_text.str.contains(re.escape(wanted_sigungu), case=False, na=False)
+        )
         priority[same_sigungu] = priority[same_sigungu].clip(lower=3)
     elif wanted_sido:
         same_sido = (

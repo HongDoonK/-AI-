@@ -83,6 +83,18 @@ def _normalize_region_text(text: str) -> str:
     return normalized
 
 
+# REGION_CODE_MAP의 충북에는 청주시가 행정 구(상당구·서원구·흥덕구·청원구) 단위로만
+# 들어있어 통합시명 "청주시"가 키에 없다. 그러나 lgcv/welfare_chungbuk_local 데이터는
+# region_sigungu에 "청주시"를 쓰므로, 세부 지역 매칭이 가능하도록 보충 인식한다.
+SUPPLEMENTARY_SIGUNGU = {
+    "충북": ["청주시"],
+}
+
+
+def _match_supplementary_sigungu(sido: str, normalized: str) -> str | None:
+    return next((name for name in SUPPLEMENTARY_SIGUNGU.get(sido, []) if name in normalized), None)
+
+
 def _extract_region_parts(text: str) -> tuple[str | None, str | None, str | None]:
     normalized = _normalize_region_text(text)
     sido = next((region for region in REGION_CODE_MAP if region in normalized), None)
@@ -90,9 +102,13 @@ def _extract_region_parts(text: str) -> tuple[str | None, str | None, str | None
 
     if sido:
         sigungu = next((name for name in REGION_CODE_MAP[sido] if name in normalized), None)
+        if sigungu is None:
+            sigungu = _match_supplementary_sigungu(sido, normalized)
     else:
         for candidate_sido, sigungu_map in REGION_CODE_MAP.items():
             match = next((name for name in sigungu_map if name in normalized), None)
+            if match is None:
+                match = _match_supplementary_sigungu(candidate_sido, normalized)
             if match:
                 sido = candidate_sido
                 sigungu = match

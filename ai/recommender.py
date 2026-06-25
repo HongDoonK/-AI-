@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import re
+
+import pandas as pd
+
 from ai.condition_extractor import extract_user_condition, has_condition_signal
 from ai.db_loader import LgcvDataUnavailable, load_lgcv_df, load_policy_df
 from ai.generator import generate_recommendations
 from ai.retriever import retrieve_top_k
+
+TARGET_RECOMMENDATION_COUNT = 5
 
 try:
     from backend.region_map import REGION_CODE_MAP
@@ -95,6 +101,10 @@ def recommend_policy(user_input: str) -> dict:
     # 충북 조건이면 충북 전용(lgcv) 데이터로 먼저 추천을 시도하고,
     # usable하지 않으면 기존 youth_policy.db 추천으로 fallback한다.
     if _is_chungbuk_condition(user_condition):
+        # 충북 세부 지역(시군구)이 명시되면 "정확 지역 후보 k개 + 기존 검색 보충 5-k개"로
+        # 조합한다. 광역(충북만)이면 기존 lgcv 우선 추천을 유지한다.
+        if _clean(user_condition.get("region_sigungu")):
+            return _recommend_chungbuk_sigungu(user_input, user_condition)
         lgcv_result = _recommend_from_lgcv(user_input, user_condition)
         if lgcv_result is not None:
             return lgcv_result
@@ -114,6 +124,109 @@ def recommend_policy(user_input: str) -> dict:
     if fallback_reason:
         result["fallback_reason"] = fallback_reason
     return result
+
+
+def _col_str(df: pd.DataFrame, column: str) -> pd.Series:
+    """DataFrame 컬럼을 결측 없는 문자열 Series로 반환(없으면 빈 문자열)."""
+    if column in df.columns:
+        return df[column].fillna("").astype(str)
+    return pd.Series([""] * len(df), index=df.index)
+
+
+def _doc_id(item: dict) -> str:
+    return _clean(item.get("doc_id") or item.get("policy_id") or item.get("source_id"))
+
+
+def _combined_chungbuk_corpus() -> pd.DataFrame:
+    """충북 세부지역 조합 추천용 코퍼스.
+
+    충북 전용(lgcv) 데이터를 우선 배치하고(별도 lgcv 파일/통합 search_documents 모두 포함)
+    그 위에 기존 통합 DB(load_policy_df)를 합친다. 동일 doc_id는 lgcv 쪽을 우선 보존한다.
+    데이터가 일부 없어도(예: 통합 테이블 부재) 가능한 만큼만 합친다.
+    """
+    frames: list[pd.DataFrame] = []
+    try:
+        lgcv_df = load_lgcv_df()
+    except (LgcvDataUnavailable, FileNotFoundError, ValueError, RuntimeError):
+        lgcv_df = None
+    if lgcv_df is not None and not lgcv_df.empty:
+        frames.append(lgcv_df)
+    try:
+        frames.append(load_policy_df())
+    except (FileNotFoundError, ValueError, RuntimeError):
+        pass
+
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    if "doc_id" in combined.columns:
+        combined = combined.drop_duplicates(subset=["doc_id"], keep="first")
+    return combined.reset_index(drop=True)
+
+
+def _exact_sigungu_df(df: pd.DataFrame, sigungu: str) -> pd.DataFrame:
+    """region_sigungu가 정확히 일치하거나 region_name에 시군구가 포함된 후보만 추린다."""
+    exact = _col_str(df, "region_sigungu").str.strip().eq(sigungu)
+    in_name = _col_str(df, "region_name").str.contains(re.escape(sigungu), na=False)
+    return df[exact | in_name]
+
+
+def _fill_pool_df(df: pd.DataFrame, sigungu: str) -> pd.DataFrame:
+    """보충 후보 풀: source_table='lgcv'이면서 시군구가 요청 지역이 아닌 행을 제외한다.
+
+    (충주시/제천시 등 다른 충북 시군 lgcv 후보 제외. 전국 후보는 그대로 둔다.)
+    """
+    is_lgcv = _col_str(df, "source_table").eq("lgcv")
+    sig = _col_str(df, "region_sigungu").str.strip()
+    mismatched_lgcv = is_lgcv & sig.ne(sigungu)
+    return df[~mismatched_lgcv]
+
+
+def _merge_unique(*lists: list[dict]) -> list[dict]:
+    """여러 후보 리스트를 순서대로 합치고 doc_id 기준 중복을 제거한다."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for candidates in lists:
+        for item in candidates:
+            key = _doc_id(item)
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _recommend_chungbuk_sigungu(user_input: str, user_condition: dict) -> dict:
+    """충북 세부 지역 추천: 정확 지역 후보 k개 + 기존 검색 보충 5-k개로 조합한다."""
+    sigungu = _clean(user_condition.get("region_sigungu"))
+    corpus = _combined_chungbuk_corpus()
+    top_k = TARGET_RECOMMENDATION_COUNT
+
+    local_top: list[dict] = []
+    if not corpus.empty:
+        local_df = _exact_sigungu_df(corpus, sigungu)
+        if not local_df.empty:
+            local_top = retrieve_top_k(user_input, user_condition, local_df, top_k=top_k)
+
+    remaining = top_k - len(local_top)
+    fill_top: list[dict] = []
+    if remaining > 0 and not corpus.empty:
+        fill_df = _fill_pool_df(corpus, sigungu)
+        if not fill_df.empty:
+            fill_top = retrieve_top_k(user_input, user_condition, fill_df, top_k=top_k)
+
+    top_policies = _merge_unique(local_top, fill_top)[:top_k]
+    recommendations = generate_recommendations(user_input, user_condition, top_policies)
+
+    # 정확 지역(lgcv) 후보가 앞에 포함되면 lgcv, 아니면 전국/기존 검색 보충이므로 default.
+    local_has_lgcv = any(str(item.get("source_table")) == "lgcv" for item in local_top)
+    return {
+        "user_condition": user_condition,
+        "recommendations": recommendations,
+        "message": "",
+        "recommendation_source": "lgcv" if local_has_lgcv else "default",
+    }
 
 
 def _recommend_from_lgcv(user_input: str, user_condition: dict) -> dict | None:

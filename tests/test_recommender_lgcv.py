@@ -20,6 +20,60 @@ def _sources(result: dict) -> list[str]:
     return [r.get("source_table") for r in result.get("recommendations", [])]
 
 
+def _sigungus(result: dict) -> list[str]:
+    return [r.get("region_sigungu") for r in result.get("recommendations", [])]
+
+
+_SEARCH_DOCS_DDL = """
+CREATE TABLE search_documents (
+    doc_id TEXT PRIMARY KEY, source_table TEXT, source_id TEXT, domain TEXT,
+    title TEXT, summary TEXT, region_name TEXT, region_sido TEXT, region_sigungu TEXT,
+    target TEXT, min_age INTEGER, max_age INTEGER, employment_status TEXT, status TEXT,
+    apply_start_date TEXT, apply_end_date TEXT, url TEXT, search_text TEXT, raw_ref TEXT, collected_at TEXT
+)
+"""
+_SEARCH_DOCS_COLS = (
+    "doc_id", "source_table", "source_id", "domain", "title", "summary", "region_name",
+    "region_sido", "region_sigungu", "target", "min_age", "max_age", "employment_status",
+    "status", "apply_start_date", "apply_end_date", "url", "search_text", "raw_ref", "collected_at",
+)
+
+
+def _doc(doc_id, source_table, domain, title, region_name, sido, sigungu, text):
+    row = dict.fromkeys(_SEARCH_DOCS_COLS, "")
+    row.update(
+        doc_id=doc_id, source_table=source_table, source_id=doc_id.split(":")[-1], domain=domain,
+        title=title, summary=title, region_name=region_name, region_sido=sido, region_sigungu=sigungu,
+        target="청년", min_age=19, max_age=39, status="청년", search_text=text,
+    )
+    return tuple(row[col] for col in _SEARCH_DOCS_COLS)
+
+
+def _build_search_docs_db(tmp_dir: str, rows: list[tuple]) -> str:
+    path = os.path.join(tmp_dir, "youth_policy.db")
+    conn = sqlite3.connect(path)
+    conn.execute(_SEARCH_DOCS_DDL)
+    placeholders = ",".join("?" * len(_SEARCH_DOCS_COLS))
+    conn.executemany(
+        f"INSERT INTO search_documents ({','.join(_SEARCH_DOCS_COLS)}) VALUES ({placeholders})",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _national_rent_docs(count: int) -> list[tuple]:
+    return [
+        _doc(
+            f"policies_processed:NAT{i}", "policies_processed", "policy_housing",
+            f"청년 월세 한시 특별지원 {i}", "전국", "전국", "",
+            "청년 월세 임대료 주거 보증금 지원 전국",
+        )
+        for i in range(1, count + 1)
+    ]
+
+
 class RecommenderLgcvTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -168,6 +222,84 @@ class RecommenderLgcvTest(unittest.TestCase):
         self.assertEqual(result.get("recommendation_source"), "default")
         self.assertNotIn("fallback_reason", result)
         self.assertNotIn("lgcv", _sources(result))
+
+    # 6) 충북 세부 지역: 청주시 후보가 0개이고 충주/제천 lgcv만 있으면
+    #    다른 충북 시군 lgcv 대신 전국 월세 후보로 채운다.
+    def test_chungbuk_sigungu_excludes_other_sigungu_lgcv(self):
+        from ai.recommender import recommend_policy
+
+        rows = [
+            _doc("lgcv:CHUNGJU1", "lgcv", "welfare", "충주 청년 월세 지원", "충북", "충북", "충주시",
+                 "충주 청년 월세 주거 복지 지자체"),
+            _doc("lgcv:JECHEON1", "lgcv", "welfare", "제천 청년 월세 지원", "충북", "충북", "제천시",
+                 "제천 청년 월세 주거 복지 지자체"),
+            *_national_rent_docs(6),
+        ]
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = _build_search_docs_db(tmp, rows)
+            previous = os.environ.get("YOUTH_POLICY_DB_PATH")
+            os.environ["YOUTH_POLICY_DB_PATH"] = db_path
+            try:
+                result = recommend_policy("충북 청주시 24살 대학생 월세 지원")
+            finally:
+                if previous is None:
+                    os.environ.pop("YOUTH_POLICY_DB_PATH", None)
+                else:
+                    os.environ["YOUTH_POLICY_DB_PATH"] = previous
+
+        self.assertGreater(len(result["recommendations"]), 0)
+        # 다른 충북 시군(충주/제천) lgcv 후보는 포함되지 않는다.
+        self.assertNotIn("lgcv", _sources(result))
+        # 전국 후보로 보충된다.
+        self.assertTrue(any(r.get("region_name") == "전국" for r in result["recommendations"]))
+        # 새 값을 추가하지 않고 default를 유지한다.
+        self.assertIn(result.get("recommendation_source"), ("default", "mixed"))
+
+    # 7) 충북 세부 지역: 청주시 후보 2개 + 전국 월세 보충으로 5개를 조합한다.
+    def test_chungbuk_sigungu_combines_local_then_national(self):
+        from ai.recommender import recommend_policy
+
+        rows = [
+            _doc("lgcv:CJ1", "lgcv", "welfare", "청주 청년 월세 지원 A", "충북 청주시", "충북", "청주시",
+                 "청주 청년 월세 주거 임대료 복지 지자체"),
+            _doc("lgcv:CJ2", "lgcv", "welfare", "청주 청년 월세 지원 B", "충북 청주시", "충북", "청주시",
+                 "청주 청년 월세 주거 보증금 복지 지자체"),
+            _doc("lgcv:CHUNGJU1", "lgcv", "welfare", "충주 청년 월세 지원", "충북", "충북", "충주시",
+                 "충주 청년 월세 주거 복지 지자체"),
+            _doc("lgcv:JECHEON1", "lgcv", "welfare", "제천 청년 월세 지원", "충북", "충북", "제천시",
+                 "제천 청년 월세 주거 복지 지자체"),
+            *_national_rent_docs(6),
+        ]
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = _build_search_docs_db(tmp, rows)
+            previous = os.environ.get("YOUTH_POLICY_DB_PATH")
+            os.environ["YOUTH_POLICY_DB_PATH"] = db_path
+            try:
+                result = recommend_policy("충북 청주시 24살 대학생 월세 지원")
+            finally:
+                if previous is None:
+                    os.environ.pop("YOUTH_POLICY_DB_PATH", None)
+                else:
+                    os.environ["YOUTH_POLICY_DB_PATH"] = previous
+
+        recs = result["recommendations"]
+        self.assertEqual(len(recs), 5)
+        # 앞쪽 2개는 청주시 정확 지역 후보다.
+        self.assertEqual(_sigungus(result)[:2], ["청주시", "청주시"])
+        # 충주/제천 lgcv 후보는 포함되지 않는다.
+        self.assertNotIn("충주시", _sigungus(result))
+        self.assertNotIn("제천시", _sigungus(result))
+        # 나머지는 전국/기존 검색 후보로 채워진다.
+        self.assertTrue(any(r.get("region_name") == "전국" for r in recs[2:]))
+
+    # 8) 충북 광역(시군구 미지정) 입력은 기존처럼 lgcv 후보를 사용할 수 있다.
+    def test_chungbuk_broad_still_uses_lgcv(self):
+        from ai.recommender import recommend_policy
+
+        result = recommend_policy("충북 사는 30세 청년 복지서비스 추천해줘")
+
+        self.assertEqual(result.get("recommendation_source"), "lgcv")
+        self.assertIn("lgcv", _sources(result))
 
     # 별도 lgcv.db 파일 경로(LGCV_POLICY_DB_PATH)도 동작한다.
     def test_separate_lgcv_file_path_works(self):
