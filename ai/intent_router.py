@@ -35,6 +35,12 @@ _ORDINAL_WORDS = {
 _RECOMMEND_SIGNALS = ["추천", "정책 없", "정책없", "정책 있", "정책있", "알아봐", "찾아", "찾아줘", "뭐가 있", "뭐 있"]
 _APPLY_DIRECT_WORDS = ["신청 방법", "신청은", "신청하려면", "어떻게 신청", "절차", "접수", "가입 방법", "가입은"]
 
+# 금액을 직접 묻는 강한 benefit 신호. "월세"·"보증금"은 정책 분야·대상을 가리킬 수
+# 있으므로 단독 strong-money로 쓰지 않는다(금액 문맥일 때만 아래 weak 경로로 benefit).
+_STRONG_MONEY_SIGNALS = ["얼마", "금액", "총액", "한도", "금리"]
+# apply/eligibility/strong-money/docs 신호가 모두 없을 때만 benefit으로 보는 약한 신호.
+_WEAK_BENEFIT_SIGNALS = ["혜택", "지원", "내용", "월세", "보증금"]
+
 
 def detect_selection(message: str) -> int | None:
     """발화에서 '몇 번째 정책'을 가리키는지 1-based 인덱스를 추출한다. 없으면 None."""
@@ -55,17 +61,27 @@ def _matches(message: str, intent_key: str) -> bool:
 def _policy_intent(text: str) -> str | None:
     """선택된 정책에 대한 상담 의도(서류/지원금/자격/신청방법). 없으면 None.
 
-    benefit은 docs/eligibility보다 먼저 본다('얼마 받을 수 있어'의 '받을 수'가
-    eligibility 키워드와 겹치므로 '얼마/금액'을 가진 benefit을 앞세운다).
+    우선순위(행위 의도 우선, 모호성 해소):
+    1. 명시적 신청 방법 신호(신청 방법/신청하려면/접수/절차 등) → apply_how.
+       "월세 지원 신청 방법"처럼 약한 benefit 단어가 붙어도 행위는 신청 방법이다.
+    2. 명시적 금액 질문(얼마/금액/총액/한도/금리) → benefit.
+       '얼마 받을 수 있어'는 strong-money('얼마')와 eligibility('받을 수')가 겹치지만
+       기존 계약상 benefit이어야 하므로 eligibility보다 위에 둔다.
+       '월세'·'보증금'은 strong-money가 아니라 금액 단어가 함께일 때만 5에서 benefit.
+    3. 명시적 자격 신호(자격/대상/해당/가능/받을 수) → eligibility.
+    4. 서류 → docs.
+    5. 그 외 약한 benefit 표현(혜택/지원/내용/월세/보증금) → benefit.
     """
-    if _matches(text, "benefit") or "얼마" in text or "받을 수" in text:
-        return BENEFIT
-    if _matches(text, "docs"):
-        return DOCS
     if any(word in text for word in _APPLY_DIRECT_WORDS):
         return APPLY_HOW
+    if any(word in text for word in _STRONG_MONEY_SIGNALS):
+        return BENEFIT
     if _matches(text, "eligibility"):
         return ELIGIBILITY
+    if _matches(text, "docs"):
+        return DOCS
+    if any(word in text for word in _WEAK_BENEFIT_SIGNALS):
+        return BENEFIT
     return None
 
 

@@ -179,8 +179,11 @@ def get_turns(session_id: str) -> list[dict[str, Any]]:
     conn = _connect()
     try:
         cursor = conn.cursor()
+        # 삽입 순서 보장: created_at은 초 단위라 같은 초에 들어온 턴 순서가 뒤섞이고
+        # turn_id는 무작위 UUID라 정렬 기준이 못 된다. SQLite rowid는 삽입마다 단조 증가하므로
+        # rowid로 정렬해야 user/assistant 턴 순서가 항상 삽입 순서와 일치한다.
         cursor.execute(
-            "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY created_at, turn_id",
+            "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY rowid",
             (session_id,),
         )
         turns = []

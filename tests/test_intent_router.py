@@ -65,6 +65,40 @@ class ClassifyIntentTest(unittest.TestCase):
     def test_apply_how(self):
         self.assertEqual(classify_intent("이거 신청 방법 알려줘", has_selected=True), APPLY_HOW)
 
+    def test_strong_money_signal_is_benefit(self):
+        self.assertEqual(classify_intent("얼마 받을 수 있어?", has_selected=True), BENEFIT)
+        self.assertEqual(classify_intent("총액 알려줘", has_selected=True), BENEFIT)
+
+    def test_eligibility_signal_beats_weak_support_word(self):
+        # 'bare 지원'·'받을 수'만으로 무조건 benefit이 되면 안 됨 → 자격/대상/받을 수는 eligibility
+        self.assertEqual(classify_intent("내가 지원 대상이야?", has_selected=True), ELIGIBILITY)
+        self.assertEqual(classify_intent("이거 받을 수 있어?", has_selected=True), ELIGIBILITY)
+        self.assertEqual(classify_intent("신청 가능해?", has_selected=True), ELIGIBILITY)
+
+    def test_weak_support_word_without_eligibility_is_benefit(self):
+        self.assertEqual(classify_intent("지원금 찾아줘", has_selected=True), BENEFIT)
+
+    def test_explicit_apply_method_beats_weak_benefit_words(self):
+        # 월세·보증금·지원이 붙어도 '신청 방법'은 apply_how
+        self.assertEqual(classify_intent("월세 지원 신청 방법 알려줘", has_selected=True), APPLY_HOW)
+        self.assertEqual(classify_intent("보증금 대출 신청 방법", has_selected=True), APPLY_HOW)
+        self.assertEqual(classify_intent("지원 신청 방법 알려줘", has_selected=True), APPLY_HOW)
+
+    def test_explicit_eligibility_beats_weak_benefit_words(self):
+        # 월세·보증금은 단독 strong-money가 아님 → 자격/대상이면 eligibility
+        self.assertEqual(classify_intent("월세 대상이야?", has_selected=True), ELIGIBILITY)
+        self.assertEqual(classify_intent("보증금 자격 되나?", has_selected=True), ELIGIBILITY)
+        self.assertEqual(classify_intent("이거 받을 수 있어?", has_selected=True), ELIGIBILITY)
+
+    def test_money_context_makes_housing_word_benefit(self):
+        # 월세·보증금 + 금액 문맥일 때만 benefit
+        self.assertEqual(classify_intent("월세 얼마 지원돼?", has_selected=True), BENEFIT)
+        self.assertEqual(classify_intent("보증금 한도가 얼마야?", has_selected=True), BENEFIT)
+        self.assertEqual(classify_intent("총액 알려줘", has_selected=True), BENEFIT)
+
+    def test_docs_request_is_docs(self):
+        self.assertEqual(classify_intent("필요한 서류 알려줘", has_selected=True), DOCS)
+
     def test_unclear(self):
         self.assertEqual(classify_intent("음 그렇구나", has_selected=True), UNCLEAR)
 

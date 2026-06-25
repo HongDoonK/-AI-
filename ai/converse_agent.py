@@ -35,6 +35,14 @@ from ai.intent_router import (
     detect_selection,
 )
 from ai.policy_chat_agent import PolicyChatAgent
+from ai.response_planner import ResponsePlan, ResponsePlanner
+from ai.response_renderer import (
+    order_actions,
+    ordered_section_keys,
+    render_follow_up,
+    render_opening,
+    section_item_limit,
+)
 
 _NEEDS_SELECT_INTENTS = {DOCS, BENEFIT, ELIGIBILITY, APPLY_HOW}
 _SELECTION_APPLY_DOC_SIGNALS = [
@@ -100,9 +108,15 @@ def _action(label: str, **kwargs: Any) -> dict[str, Any]:
 
 
 class ConverseAgent:
-    def __init__(self, chat_agent: PolicyChatAgent | None = None, apply_agent: ApplyAgent | None = None):
+    def __init__(
+        self,
+        chat_agent: PolicyChatAgent | None = None,
+        apply_agent: ApplyAgent | None = None,
+        response_planner: ResponsePlanner | None = None,
+    ):
         self.chat_agent = chat_agent or PolicyChatAgent()
         self.apply_agent = apply_agent or ApplyAgent(chat_agent=self.chat_agent)
+        self.response_planner = response_planner or ResponsePlanner()
 
     def respond(
         self,
@@ -111,6 +125,7 @@ class ConverseAgent:
         selected_policy: dict[str, Any] | None = None,
         last_recommendations: list[dict[str, Any]] | None = None,
         profile: dict[str, Any] | None = None,
+        conversation_context: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         last_recommendations = last_recommendations or []
         intent = classify_intent(message, has_selected=bool(selected_policy))
@@ -118,12 +133,25 @@ class ConverseAgent:
         if intent == NEED_RECOMMENDATION:
             return self._guide_to_recommend(last_recommendations)
         if intent == SELECT:
-            return self._handle_select(message, selected_policy, last_recommendations, profile)
+            return self._handle_select(
+                message,
+                selected_policy,
+                last_recommendations,
+                profile,
+                conversation_context or [],
+            )
         if intent in _NEEDS_SELECT_INTENTS:
             policy = self._resolve_policy(message, selected_policy, last_recommendations)
             if not policy:
                 return self._need_select(last_recommendations, intent)
-            return self._handle_policy_intent(intent, policy, profile, last_recommendations)
+            return self._handle_policy_intent(
+                intent,
+                policy,
+                profile,
+                last_recommendations,
+                message,
+                conversation_context or [],
+            )
         return self._handle_unclear(selected_policy, last_recommendations)
 
     # ── 의도별 핸들러 ────────────────────────────────────────────────
@@ -161,13 +189,21 @@ class ConverseAgent:
         selected_policy: dict[str, Any] | None,
         last_recommendations: list[dict[str, Any]],
         profile: dict[str, Any] | None,
+        conversation_context: list[dict[str, Any]],
     ) -> dict[str, Any]:
         policy = self._resolve_policy(message, selected_policy, last_recommendations)
         if not policy:
             return self._need_select(last_recommendations, SELECT)
         followup_intent = _followup_intent_after_selection(message)
         if followup_intent:
-            return self._handle_policy_intent(followup_intent, policy, profile, last_recommendations)
+            return self._handle_policy_intent(
+                followup_intent,
+                policy,
+                profile,
+                last_recommendations,
+                message,
+                conversation_context,
+            )
         return self.select(policy)
 
     def select(self, policy_ref: dict[str, Any]) -> dict[str, Any]:
@@ -195,10 +231,25 @@ class ConverseAgent:
         policy: dict[str, Any],
         profile: dict[str, Any] | None,
         last_recommendations: list[dict[str, Any]],
+        message: str,
+        conversation_context: list[dict[str, Any]],
     ) -> dict[str, Any]:
         context = self.chat_agent.load_policy_context(policy)
         title = _clean(context.get("title")) or policy["title"]
-        base = {"intent": intent, "selected_policy": policy}
+        response_plan = self.response_planner.plan(
+            policy_context=context,
+            intent=intent,
+            question=message,
+            user_context=profile or {},
+            conversation_context=conversation_context,
+        )
+        plan_meta = response_plan.to_dict()
+        base = {
+            "intent": intent,
+            "selected_policy": policy,
+            "_response_plan_meta": plan_meta,
+        }
+        source_label = context.get("source_label", "정책 DB")
 
         if intent == DOCS:
             plan = self.apply_agent.build_plan(policy, profile)
@@ -207,71 +258,206 @@ class ConverseAgent:
                 for item in plan["checklist"]
                 if item["kind"] == "document"
             ]
-            lines = [f"'{title}' 신청에 필요한 서류와 발급처입니다."]
-            for doc in documents:
-                where = doc["help_label"] or "공고/담당 기관에서 확인"
-                url = f" ({doc['help_url']})" if doc.get("help_url") else ""
-                lines.append(f"  - {doc['label']} → {where}{url}")
-            if plan.get("apply_url"):
-                lines.append(f"\n신청 페이지: {plan['apply_url']}")
-            lines.append(f"\n{plan.get('next_action', '')}".rstrip())
-            return {**base, "reply": "\n".join(lines), "documents": documents,
-                    "apply_channel": plan.get("apply_channel"), "apply_url": plan.get("apply_url"),
-                    "suggested_actions": [
-                        _action("얼마 받는지 보기", intent=BENEFIT),
-                        _action("신청 준비 시작", action="create_apply_plan"),
-                    ]}
+            sections = {
+                "documents": (
+                    "준비 서류",
+                    [
+                        f"{doc['label']} → {doc['help_label'] or '공고/담당 기관에서 확인'}"
+                        + (f" ({doc['help_url']})" if doc.get("help_url") else "")
+                        for doc in documents
+                    ],
+                ),
+                "issuance": (
+                    "발급처 확인",
+                    [
+                        f"{doc['label']}: {doc['help_label'] or '공고/담당 기관에서 확인'}"
+                        for doc in documents
+                    ] if response_plan.focus == "issuance" else [],
+                ),
+                "apply_link": (
+                    "신청 페이지",
+                    [plan["apply_url"]] if plan.get("apply_url") else [],
+                ),
+                "next_step": (
+                    "다음 행동",
+                    [plan["next_action"]] if plan.get("next_action") else [],
+                ),
+            }
+            reply = self._render_planned_sections(
+                title=title,
+                intent=intent,
+                response_plan=response_plan,
+                sections=sections,
+                source_label=source_label,
+            )
+            actions = order_actions(
+                [
+                    _action("얼마 받는지 보기", intent=BENEFIT),
+                    _action("신청 자격 확인", intent=ELIGIBILITY),
+                    _action("신청 준비 시작", action="create_apply_plan"),
+                ],
+                response_plan,
+            )
+            return {
+                **base,
+                "reply": reply,
+                "documents": documents,
+                "apply_channel": plan.get("apply_channel"),
+                "apply_url": plan.get("apply_url"),
+                "suggested_actions": actions,
+            }
 
         if intent == BENEFIT:
             benefit = estimate_benefit(context)
-            return {**base, "reply": f"'{title}' — {benefit['summary_line']}", "benefit": benefit,
-                    "suggested_actions": [
-                        _action("필요 서류 보기", intent=DOCS),
-                        _action("신청 준비 시작", action="create_apply_plan"),
-                    ]}
+            sections = {
+                "summary": (
+                    "",
+                    [benefit["summary_line"]] if response_plan.focus == "core_benefit" else [],
+                ),
+                "amount": ("지원 금액", [benefit["summary_line"]]),
+                "duration": (
+                    "지원 기간",
+                    [f"{benefit['months']}개월"] if benefit.get("months") else [],
+                ),
+                "eligibility": (
+                    "추가 확인",
+                    ["실제 수령 여부는 정책 자격 조건 확인이 필요합니다."],
+                ),
+            }
+            reply = self._render_planned_sections(
+                title=title,
+                intent=intent,
+                response_plan=response_plan,
+                sections=sections,
+                source_label=source_label,
+            )
+            actions = order_actions(
+                [
+                    _action("신청 자격 확인", intent=ELIGIBILITY),
+                    _action("필요 서류 보기", intent=DOCS),
+                    _action("신청 준비 시작", action="create_apply_plan"),
+                ],
+                response_plan,
+            )
+            return {
+                **base,
+                "reply": reply,
+                "benefit": benefit,
+                "suggested_actions": actions,
+            }
 
         if intent == ELIGIBILITY:
             if profile is None:
+                sections = {
+                    "missing_info": (
+                        "먼저 필요한 정보",
+                        ["나이", "거주 지역", "취업 상태 등 정책별 조건"],
+                    ),
+                    "requirements": (
+                        "확인 방법",
+                        ["왼쪽 '조건 저장' 폼에 프로필을 저장하면 정책 조건과 자동 비교합니다."],
+                    ),
+                }
+            else:
+                eligibility, notes = check_eligibility(context, profile)
+                label = {"ok": "신청 조건에 맞아 보여요.",
+                         "needs_info": "대체로 맞지만 확인이 필요한 항목이 있어요.",
+                         "ineligible": "프로필 기준으로는 조건에 맞지 않을 수 있어요."}.get(eligibility, "")
+                sections = {
+                    "summary": ("판정", [label]),
+                    "reasons": ("판정 근거", [note["reason"] for note in notes]),
+                    "requirements": (
+                        "추가 확인",
+                        ["DB에 없는 세부 기준은 공식 공고에서 최종 확인해야 합니다."],
+                    ),
+                }
+
+            reply = self._render_planned_sections(
+                title=title,
+                intent=intent,
+                response_plan=response_plan,
+                sections=sections,
+                source_label=source_label,
+            )
+            actions = order_actions(
+                [
+                    _action("필요 서류 보기", intent=DOCS),
+                    _action("얼마 받는지 보기", intent=BENEFIT),
+                    _action("신청 준비 시작", action="create_apply_plan"),
+                ],
+                response_plan,
+            )
+            if profile is None:
                 return {
                     **base,
-                    "reply": (
-                        f"'{title}' 신청 자격을 확인하려면 프로필(나이·지역·취업 상태 등)이 필요해요. "
-                        "왼쪽 '조건 저장' 폼에서 프로필을 저장하면 더 정확한 적격성 안내를 드릴게요."
-                    ),
+                    "reply": reply,
                     "eligibility": "needs_info",
-                    "eligibility_notes": [{"reason": "프로필 미설정 — 나이·지역·취업 상태를 저장하면 자동 비교합니다."}],
-                    "suggested_actions": [
-                        _action("필요 서류 보기", intent=DOCS),
-                        _action("얼마 받는지 보기", intent=BENEFIT),
+                    "eligibility_notes": [
+                        {"reason": "프로필 미설정 — 나이·지역·취업 상태를 저장하면 자동 비교합니다."}
                     ],
+                    "suggested_actions": actions,
                 }
-            eligibility, notes = check_eligibility(context, profile)
-            label = {"ok": "신청 조건에 맞아 보여요.",
-                     "needs_info": "대체로 맞지만 확인이 필요한 항목이 있어요.",
-                     "ineligible": "프로필 기준으로는 조건에 맞지 않을 수 있어요."}.get(eligibility, "")
-            lines = [f"'{title}' 신청 자격을 확인했어요. {label}"]
-            for note in notes:
-                lines.append(f"  - {note['reason']}")
-            return {**base, "reply": "\n".join(lines), "eligibility": eligibility, "eligibility_notes": notes,
-                    "suggested_actions": [
-                        _action("필요 서류 보기", intent=DOCS),
-                        _action("얼마 받는지 보기", intent=BENEFIT),
-                    ]}
+            return {
+                **base,
+                "reply": reply,
+                "eligibility": eligibility,
+                "eligibility_notes": notes,
+                "suggested_actions": actions,
+            }
 
         # APPLY_HOW
         summary = self.chat_agent._build_user_summary(context)
         detail = self.chat_agent._build_apply_detail(context, summary)
-        lines = [f"'{title}' 신청 방법입니다."]
-        for heading, key in [("신청 방법", "method"), ("신청 기간", "period"), ("신청 링크", "links"), ("문의처", "contact")]:
-            items = detail.get(key) or []
-            if items:
+        sections = {
+            "method": ("신청 방법", detail.get("method") or []),
+            "period": ("신청 기간", detail.get("period") or []),
+            "links": ("신청 링크", detail.get("links") or []),
+            "documents": ("준비 서류", detail.get("docs") or []),
+            "contact": ("문의처", detail.get("contact") or []),
+            "next_step": ("다음 행동", detail.get("notes") or []),
+        }
+        reply = self._render_planned_sections(
+            title=title,
+            intent=intent,
+            response_plan=response_plan,
+            sections=sections,
+            source_label=source_label,
+        )
+        actions = order_actions(
+            [
+                _action("필요 서류 보기", intent=DOCS),
+                _action("얼마 받는지 보기", intent=BENEFIT),
+                _action("신청 준비 시작", action="create_apply_plan"),
+            ],
+            response_plan,
+        )
+        return {
+            **base,
+            "reply": reply,
+            "apply_detail": detail,
+            "suggested_actions": actions,
+        }
+
+    def _render_planned_sections(
+        self,
+        *,
+        title: str,
+        intent: str,
+        response_plan: ResponsePlan,
+        sections: dict[str, tuple[str, list[str]]],
+        source_label: str,
+    ) -> str:
+        limit = section_item_limit(response_plan)
+        lines = [render_opening(title, intent, response_plan)]
+        for key in ordered_section_keys(response_plan, sections):
+            heading, items = sections[key]
+            if not items:
+                continue
+            if heading:
                 lines.append(f"\n{heading}")
-                lines.extend(f"  - {item}" for item in items[:4])
-        return {**base, "reply": "\n".join(lines), "apply_detail": detail,
-                "suggested_actions": [
-                    _action("필요 서류 보기", intent=DOCS),
-                    _action("얼마 받는지 보기", intent=BENEFIT),
-                ]}
+            lines.extend(f"  - {item}" for item in items[:limit])
+        lines.append(f"\n{render_follow_up(response_plan, source_label)}")
+        return "\n".join(lines)
 
     # ── 보조 ────────────────────────────────────────────────────────
     def _resolve_policy(

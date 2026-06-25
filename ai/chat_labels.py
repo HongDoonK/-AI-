@@ -9,6 +9,16 @@ SOURCE_KEY_COLUMNS = {
     "smallloan_youth": "id",
     "myhome_notices": "id",
     "rental_houses": "id",
+    # 복지서비스: 전국(welfare_central)·충북 지자체(lgcv) 모두 service_id가 키다.
+    "welfare_central": "service_id",
+    "lgcv": "service_id",
+}
+
+# source_table → 원본 행이 실제로 들어있는 테이블명. 대부분 source_table과 같지만,
+# lgcv는 search_documents에 source_table="lgcv"로 통합되어도 원본은 충북 원천
+# 테이블 welfare_chungbuk_local에 있다. 명시되지 않은 source_table은 자기 자신을 쓴다.
+SOURCE_ORIGINAL_TABLES = {
+    "lgcv": "welfare_chungbuk_local",
 }
 
 SOURCE_LABELS = {
@@ -18,6 +28,8 @@ SOURCE_LABELS = {
     "smallloan_youth": "청년 금융상품",
     "myhome_notices": "마이홈 임대공고",
     "rental_houses": "청년 임대주택 단지",
+    "welfare_central": "전국 복지서비스",
+    "lgcv": "충북 지자체 복지서비스",
 }
 
 DOMAIN_LABELS = {
@@ -32,6 +44,7 @@ DOMAIN_LABELS = {
     "loan": "청년 금융상품",
     "training": "직업훈련",
     "startup": "창업 공고",
+    "welfare": "복지서비스",
 }
 
 FIELD_LABELS = {
@@ -144,6 +157,6 @@ INTENT_KEYWORDS = {
     "eligibility": ["자격", "조건", "대상", "가능", "받을 수", "해당", "지원대상"],
     "apply": ["신청", "방법", "절차", "어디", "링크", "접수", "가입"],
     "period": ["기간", "마감", "언제", "날짜", "시작", "종료"],
-    "benefit": ["혜택", "지원", "내용", "금액", "얼마", "한도", "금리", "월세", "보증금"],
+    "benefit": ["혜택", "지원", "내용", "금액", "총액", "얼마", "한도", "금리", "월세", "보증금"],
     "contact": ["문의", "연락", "전화", "기관", "담당"],
 }

@@ -185,6 +185,28 @@ class RetrieverRankingTest(unittest.TestCase):
 
         self.assertEqual(results[0]["doc_id"], "national_rent_loan")
 
+    def test_welfare_query_keeps_welfare_domain_candidates(self):
+        # interest="복지"에서 domain="welfare"가 도메인 필터로 탈락하면 안 된다.
+        welfare_central = _row("welfare_central", "welfare", "청년 복지 통합지원", "청년 복지 통합지원 전국 복지서비스 생활지원")
+        welfare_central["source_table"] = "welfare_central"
+        welfare_central["region_name"] = "전국"
+        welfare_central["region_sido"] = "전국"
+        lgcv = _row("lgcv", "welfare", "충북 청년 복지수당", "충북 청년 복지수당 복지서비스 생활지원")
+        lgcv["source_table"] = "lgcv"
+        lgcv["region_name"] = "충북"
+        lgcv["region_sido"] = "충북"
+        df = pd.DataFrame([welfare_central, lgcv])
+
+        results = retrieve_top_k(
+            "28세 청년 복지서비스 알려줘",
+            {"age": 28, "interest": "복지"},
+            df,
+            top_k=5,
+        )
+        doc_ids = {row["doc_id"] for row in results}
+        self.assertIn("welfare_central", doc_ids)
+        self.assertIn("lgcv", doc_ids)
+
     def test_startup_query_ranks_startup_before_general_finance(self):
         df = pd.DataFrame([
             _row("startup", "startup", "청년 창업 사업화 지원", "서울 예비창업자 창업 사업화 자금 지원"),

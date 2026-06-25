@@ -150,6 +150,84 @@ class ConverseAgentTest(unittest.TestCase):
         self.assertIn("프로필", result["reply"])
         self.assertTrue(result["eligibility_notes"])
 
+    def test_docs_response_plan_changes_on_specific_follow_up_without_changing_documents(self):
+        first = self.agent.respond(
+            message="필요한 서류가 뭐야?",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile={"age": 26, "region_sido": "서울"},
+            conversation_context=[],
+        )
+        history = [
+            {"role": "user", "content": "필요한 서류가 뭐야?"},
+            {
+                "role": "assistant",
+                "intent": "docs",
+                "content": first["reply"],
+                "payload": {"response_plan_meta": first["_response_plan_meta"]},
+            },
+        ]
+        second = self.agent.respond(
+            message="그 서류는 어디서 발급해?",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile={"age": 26, "region_sido": "서울"},
+            conversation_context=history,
+        )
+        self.assertEqual(first["documents"], second["documents"])
+        self.assertNotEqual(first["reply"], second["reply"])
+        self.assertEqual(second["_response_plan_meta"]["focus"], "issuance")
+
+    def test_apply_method_question_with_housing_word_routes_to_apply_how(self):
+        result = self.agent.respond(
+            message="월세 지원 신청 방법 알려줘",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile={"age": 26, "region_sido": "서울"},
+            conversation_context=[],
+        )
+        self.assertEqual(result["intent"], "apply_how")
+        self.assertNotIn("benefit", result)
+        self.assertIn("apply_detail", result)
+
+    def test_eligibility_question_with_housing_word_routes_to_eligibility(self):
+        result = self.agent.respond(
+            message="보증금 자격 되나?",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile=None,
+            conversation_context=[],
+        )
+        self.assertEqual(result["intent"], "eligibility")
+        self.assertNotIn("benefit", result)
+
+    def test_benefit_structured_value_is_unchanged_by_history(self):
+        first = self.agent.respond(
+            message="얼마 받을 수 있어?",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile=None,
+            conversation_context=[],
+        )
+        second = self.agent.respond(
+            message="총액만 다시 알려줘",
+            selected_policy=P001,
+            last_recommendations=[P001],
+            profile=None,
+            conversation_context=[
+                {"role": "user", "content": "얼마 받을 수 있어?"},
+                {
+                    "role": "assistant",
+                    "intent": "benefit",
+                    "content": first["reply"],
+                    "payload": {"response_plan_meta": first["_response_plan_meta"]},
+                },
+            ],
+        )
+        self.assertEqual(first["benefit"], second["benefit"])
+        self.assertEqual(second["benefit"]["monthly_won"], 200_000)
+        self.assertEqual(second["benefit"]["months"], 12)
+
 
 if __name__ == "__main__":
     unittest.main()

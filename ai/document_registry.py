@@ -92,6 +92,12 @@ DOMAIN_DEFAULT_DOCUMENTS: dict[str, list[str]] = {
         "신분증",
         "사업자등록증명 (기창업자인 경우)",
     ],
+    "welfare": [
+        "신분증",
+        "주민등록등본",
+        "소득·재산 증빙 서류 (해당 시)",
+        "복지서비스 신청서 (행정복지센터/공고 양식)",
+    ],
 }
 
 STUDENT_LOAN_DOCUMENTS = [
@@ -108,6 +114,7 @@ DOMAIN_FALLBACK_LINKS: dict[str, dict[str, str]] = {
     "loan": {"help_label": "서민금융진흥원 금융상품 안내", "help_url": "https://www.kinfa.or.kr/"},
     "training": {"help_label": "HRD-Net에서 과정 검색", "help_url": "https://www.work24.go.kr/"},
     "startup": {"help_label": "K-Startup 공고 확인", "help_url": "https://www.k-startup.go.kr/"},
+    "welfare": {"help_label": "복지로에서 서비스 확인", "help_url": "https://www.bokjiro.go.kr/"},
 }
 
 

@@ -25,6 +25,7 @@ DOMAIN_LABELS = {
     "loan": "청년 금융상품",
     "training": "직업훈련",
     "startup": "창업 공고",
+    "welfare": "복지서비스",
 }
 
 SOURCE_LABELS = {
@@ -34,6 +35,8 @@ SOURCE_LABELS = {
     "smallloan_youth": "청년 금융상품",
     "myhome_notices": "마이홈 임대공고",
     "rental_houses": "청년 임대주택",
+    "welfare_central": "전국 복지서비스",
+    "lgcv": "충북 지자체 복지서비스",
 }
 
 SOURCE_KEY_COLUMNS = {

@@ -147,6 +147,8 @@ def resolve_channel(context: dict[str, Any]) -> tuple[str, str]:
         original.get("rltSite"),
         original.get("myhome_url"),
         original.get("jnMthd"),
+        original.get("homepage"),
+        original.get("service_url"),
     ]
     url = next((candidate for value in url_fields if (candidate := _extract_url(value))), "")
     if url:
@@ -154,7 +156,7 @@ def resolve_channel(context: dict[str, Any]) -> tuple[str, str]:
 
     apply_method = " ".join(
         _clean(original.get(key))
-        for key in ["apply_method", "jnMthd"]
+        for key in ["apply_method", "application_method", "application_method_type", "jnMthd"]
         if _clean(original.get(key))
     )
     if any(word in apply_method for word in ["온라인", "홈페이지", "사이트", "포털", "모바일", "앱"]):

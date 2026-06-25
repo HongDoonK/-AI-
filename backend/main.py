@@ -275,6 +275,7 @@ def converse(request: ConverseRequest):
                 selected = match
 
         profile = get_user(request.user_id) if request.user_id else None
+        conversation_context = conversation_store.get_turns(session_id)
         conversation_store.add_turn(session_id, "user", request.message)
 
         if request.policy and not request.message.strip():
@@ -285,6 +286,7 @@ def converse(request: ConverseRequest):
                 selected_policy=selected,
                 last_recommendations=last_recommendations,
                 profile=profile,
+                conversation_context=conversation_context,
             )
 
         # 상태 영속화: 추천 턴은 선택 해제+추천 목록 갱신, 그 외엔 선택 정책만 반영
@@ -304,10 +306,14 @@ def converse(request: ConverseRequest):
         else:
             conversation_store.update_session(session_id, last_intent=result.get("intent"))
 
+        response_plan_meta = result.pop("_response_plan_meta", None)
+        assistant_payload = {key: value for key, value in result.items() if key != "reply"}
+        if response_plan_meta:
+            assistant_payload["response_plan_meta"] = response_plan_meta
         conversation_store.add_turn(
             session_id, "assistant", result["reply"],
             intent=result.get("intent"),
-            payload={key: value for key, value in result.items() if key != "reply"},
+            payload=assistant_payload,
         )
 
         result.setdefault("selected_policy", None)

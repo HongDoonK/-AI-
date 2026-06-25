@@ -107,6 +107,16 @@ SAMPLE_DOCUMENTS = [
      "고연령 제외 테스트 정책", "40세 이상만 신청 가능(연령 필터 대상)", "전국",
      "전국", "", "중장년", 40, 64, "", "", "", "",
      "https://example.com/p008", "중장년 금융 지원 전국"),
+    # 최신 통합 구조: 전국 복지서비스(welfare_central)와 충북 지자체 복지서비스(lgcv)가
+    # search_documents 안에 source_table로 구분되어 들어온다(domain="welfare").
+    ("welfare_central:W001", "welfare_central", "W001", "welfare",
+     "청년 복지 통합지원", "전국 청년 대상 복지서비스 통합 지원", "전국",
+     "전국", "", "청년", 19, 39, "", "청년", "", "",
+     "https://example.com/w001", "청년 복지 통합지원 전국 복지서비스 생활지원 상담"),
+    ("lgcv:L001", "lgcv", "L001", "welfare",
+     "충북 청년 복지수당", "충청북도 거주 청년에게 복지수당을 지급합니다", "충북",
+     "충북", "", "청년", 19, 39, "", "청년", "", "",
+     "https://example.com/lgcv-l001", "충북 청년 복지수당 충청북도 복지서비스 생활지원 지자체"),
 ]
 
 SAMPLE_CENTERS = [
@@ -123,6 +133,21 @@ SAMPLE_POLICIES_PROCESSED = [
     ("P002", "청년 자산형성 적금", "전국 청년 대상 자산형성 적금 상품",
      "정부 매칭 적립", "", "19", "34", "", "전국",
      "청년 자산형성 적금 저축 금융 목돈 전국"),
+]
+
+
+LGCV_DEFAULT_OUTPUT = os.path.join("tests", "fixtures", "fixture_lgcv_policy.db")
+
+# 충북 전용(lgcv) 샘플(별도 파일 케이스). 충북 지자체 복지서비스 → domain="welfare".
+SAMPLE_LGCV_DOCUMENTS = [
+    ("lgcv:L001", "lgcv", "L001", "welfare",
+     "충북 청년 복지수당", "충청북도 거주 청년에게 복지수당을 지급합니다", "충북",
+     "충북", "충주시", "청년", 19, 39, "", "청년", "", "",
+     "https://example.com/lgcv-l001", "충북 충주 청년 복지수당 복지서비스 생활지원 지자체"),
+    ("lgcv:L002", "lgcv", "L002", "welfare",
+     "충북 청년 생활안정 지원", "충북 청년 생활안정 복지 지원", "충북",
+     "충북", "제천시", "청년", 19, 39, "", "청년", "", "",
+     "https://example.com/lgcv-l002", "충북 제천 청년 생활안정 복지서비스 상담 지자체"),
 ]
 
 
@@ -163,6 +188,36 @@ def build_fixture_db(output_path: str = DEFAULT_OUTPUT) -> str:
     conn.commit()
     conn.close()
     print(f"fixture DB 생성 완료: {output_path} (search_documents {len(SAMPLE_DOCUMENTS)}건)")
+    return output_path
+
+
+def build_lgcv_fixture_db(output_path: str = LGCV_DEFAULT_OUTPUT) -> str:
+    """충북 전용(lgcv) 테스트 DB 생성. lgcv 테이블 하나만 담는다."""
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    if os.path.exists(output_path):
+        os.remove(output_path)
+
+    conn = sqlite3.connect(output_path)
+    cursor = conn.cursor()
+    cursor.execute(SEARCH_DOCUMENTS_DDL.replace("search_documents", "lgcv"))
+
+    for doc in SAMPLE_LGCV_DOCUMENTS:
+        cursor.execute(
+            """
+            INSERT INTO lgcv (
+                doc_id, source_table, source_id, domain, title, summary,
+                region_name, region_sido, region_sigungu, target,
+                min_age, max_age, employment_status, status,
+                apply_start_date, apply_end_date, url, search_text,
+                raw_ref, collected_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '', '')
+            """,
+            doc,
+        )
+
+    conn.commit()
+    conn.close()
+    print(f"lgcv fixture DB 생성 완료: {output_path} (lgcv {len(SAMPLE_LGCV_DOCUMENTS)}건)")
     return output_path
 
 

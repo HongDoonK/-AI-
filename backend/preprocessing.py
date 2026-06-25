@@ -333,6 +333,33 @@ def _infer_policy_domain(row: dict) -> str:
     return "policy"
 
 
+def _lgcv_region_parts(item: dict) -> tuple[str, str, str]:
+    """lgcv(충북 지자체 복지서비스) 행의 지역값을 충북 기준으로 정규화한다.
+
+    원천 지역 컬럼이 있으면 충북 시군구명을 추출하고, 비어 있으면 기본값으로
+    region_name="충북", region_sido="충북", region_sigungu=""를 사용한다.
+    lgcv는 충북 지자체 서비스이므로 region_sido는 항상 "충북"으로 고정한다.
+    """
+    raw = _join_parts(
+        item.get("region_name"), item.get("region_sido"), item.get("region_sigungu"),
+        item.get("region"), item.get("area"),
+        item.get("sido"), item.get("sigungu"), item.get("ctpv_nm"),
+        item.get("sgg_nm"), item.get("sido_name"), item.get("sigungu_name"),
+        item.get("addr"), item.get("address"),
+    )
+    region_sigungu = ""
+    if raw:
+        for name in REGION_CODE_MAP.get("충북", {}):
+            if name in raw:
+                region_sigungu = name
+                break
+        if not region_sigungu and "청주" in raw:
+            region_sigungu = "청주시"
+    region_sido = "충북"
+    region_name = f"{region_sido} {region_sigungu}".strip() if region_sigungu else "충북"
+    return region_name, region_sido, region_sigungu
+
+
 def _insert_search_document(cursor, doc: dict):
     columns = [
         "doc_id",
@@ -404,6 +431,129 @@ def rebuild_search_documents():
                 "search_text": item.get("search_text") or _join_parts(item.get("policy_name"), summary),
                 "raw_ref": source_id,
                 "collected_at": item.get("last_mod_date"),
+            })
+            saved += 1
+
+    # 전국 단위 복지서비스(보건복지부 복지로 등). source_table="welfare_central".
+    if _table_exists(cursor, "welfare_central"):
+        for row in cursor.execute("SELECT * FROM welfare_central").fetchall():
+            item = dict(row)
+            source_id = _clean(item.get("service_id"))
+            if not source_id:
+                print("⚠️ service_id가 없는 welfare_central 행을 건너뜁니다.")
+                continue
+
+            summary = _join_parts(
+                item.get("summary"),
+                item.get("detail_summary"),
+                item.get("support_content"),
+            )
+            target = _join_parts(
+                item.get("life_cycle"),
+                item.get("target_group"),
+                item.get("target_detail"),
+                item.get("selection_criteria"),
+            )
+            search_text = _clean(item.get("search_text")) or _join_parts(
+                item.get("service_name"),
+                item.get("interest_theme"),
+                summary,
+                target,
+                item.get("application_method"),
+                item.get("ministry"),
+                item.get("department"),
+                item.get("responsible_agency"),
+            )
+            _insert_search_document(cursor, {
+                "doc_id": f"welfare_central:{source_id}",
+                "source_table": "welfare_central",
+                "source_id": source_id,
+                "domain": "welfare",
+                "title": item.get("service_name"),
+                "summary": summary,
+                "region_name": "전국",
+                "region_sido": "전국",
+                "region_sigungu": "",
+                "target": target,
+                "min_age": None,
+                "max_age": None,
+                "employment_status": "",
+                "status": item.get("life_cycle"),
+                "apply_start_date": "",
+                "apply_end_date": "",
+                "url": item.get("service_url") or item.get("homepage") or "",
+                "search_text": search_text,
+                "raw_ref": source_id,
+                "collected_at": item.get("imported_at"),
+            })
+            saved += 1
+
+    # 충북 지자체 복지서비스. source_table="lgcv". welfare_central(전국)과 구분된다.
+    # origin/main DB uses welfare_chungbuk_local as the raw source table name.
+    for lgcv_source_table in ("lgcv", "welfare_chungbuk_local"):
+        if not _table_exists(cursor, lgcv_source_table):
+            continue
+        for row in cursor.execute(f"SELECT * FROM {lgcv_source_table}").fetchall():
+            item = dict(row)
+            source_id = _clean(
+                item.get("service_id") or item.get("source_id") or item.get("id")
+            )
+            if not source_id:
+                print("⚠️ source_id가 없는 lgcv 행을 건너뜁니다.")
+                continue
+
+            service_name = (
+                item.get("service_name") or item.get("title") or item.get("name")
+            )
+            summary = _join_parts(
+                item.get("summary"),
+                item.get("detail_summary"),
+                item.get("support_content"),
+                item.get("description"),
+            )
+            target = _join_parts(
+                item.get("life_cycle"),
+                item.get("target_group"),
+                item.get("target_detail"),
+                item.get("target"),
+                item.get("selection_criteria"),
+            )
+            agency = _join_parts(
+                item.get("responsible_agency"),
+                item.get("department"),
+                item.get("ministry"),
+                item.get("organization"),
+            )
+            region_name, region_sido, region_sigungu = _lgcv_region_parts(item)
+            search_text = _clean(item.get("search_text")) or _join_parts(
+                service_name,
+                summary,
+                target,
+                item.get("application_method"),
+                agency,
+                region_name,
+            )
+            _insert_search_document(cursor, {
+                "doc_id": f"lgcv:{source_id}",
+                "source_table": "lgcv",
+                "source_id": source_id,
+                "domain": "welfare",
+                "title": service_name,
+                "summary": summary,
+                "region_name": region_name,
+                "region_sido": region_sido,
+                "region_sigungu": region_sigungu,
+                "target": target,
+                "min_age": None,
+                "max_age": None,
+                "employment_status": "",
+                "status": item.get("life_cycle"),
+                "apply_start_date": "",
+                "apply_end_date": "",
+                "url": item.get("service_url") or item.get("homepage") or item.get("url") or "",
+                "search_text": search_text,
+                "raw_ref": source_id,
+                "collected_at": item.get("imported_at") or item.get("collected_at"),
             })
             saved += 1
 

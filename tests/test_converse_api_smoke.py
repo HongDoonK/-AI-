@@ -120,6 +120,37 @@ class ConverseApiSmokeTest(unittest.TestCase):
         self.assertIsNotNone(chat_body["selected_policy"])
         self.assertEqual(chat_body["selected_policy"]["doc_id"], first_doc_id)
 
+    def test_response_plan_meta_is_stored_in_history_but_not_returned_publicly(self):
+        selected = self.client.post(
+            "/agent/converse",
+            json={"message": "", "policy": SEEDED_POLICY},
+        ).json()
+        session_id = selected["session_id"]
+
+        response = self._say("필요한 서류가 뭐야?", session_id=session_id)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("_response_plan_meta", response.json())
+        self.assertNotIn("response_plan_meta", response.json())
+
+        turns = self.client.get(f"/agent/converse/{session_id}").json()["turns"]
+        assistant_turn = next(
+            turn for turn in reversed(turns)
+            if turn["role"] == "assistant" and turn["intent"] == "docs"
+        )
+        self.assertIn("response_plan_meta", assistant_turn["payload"])
+
+    def test_multiturn_follow_up_changes_focus_without_changing_selected_policy(self):
+        selected = self.client.post(
+            "/agent/converse",
+            json={"message": "", "policy": SEEDED_POLICY},
+        ).json()
+        session_id = selected["session_id"]
+        first = self._say("필요한 서류가 뭐야?", session_id=session_id).json()
+        second = self._say("그 서류는 어디서 발급해?", session_id=session_id).json()
+        self.assertEqual(first["selected_policy"]["doc_id"], second["selected_policy"]["doc_id"])
+        self.assertEqual(first["documents"], second["documents"])
+        self.assertNotEqual(first["reply"], second["reply"])
+
     def test_unknown_session_returns_404(self):
         self.assertEqual(self.client.get("/agent/converse/no-such-session").status_code, 404)
 

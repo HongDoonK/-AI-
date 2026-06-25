@@ -11,6 +11,7 @@ from ai.chat_labels import (
     INTENT_KEYWORDS,
     SOURCE_KEY_COLUMNS,
     SOURCE_LABELS,
+    SOURCE_ORIGINAL_TABLES,
 )
 from ai.chat_text_utils import (
     _append,
@@ -30,14 +31,195 @@ from ai.chat_text_utils import (
     _strip_label,
     _support_content_only,
 )
+from ai.benefit_estimator import estimate_benefit
 from ai.db_loader import find_db_path
 from ai.llm_client import LLMUnavailable, create_chat_response, llm_enabled
+from ai.response_planner import ResponsePlan, ResponsePlanner
+from ai.response_renderer import (
+    ordered_section_keys,
+    render_follow_up,
+    render_opening,
+    section_item_limit,
+)
+
+# ── LLM 응답 사실 검증용 순수 함수 (금액·기간·날짜·URL) ───────────────────
+# grounding 검증은 작은 순수 함수로 분리해 단위 테스트한다.
+_MONEY_UNITS = ["억원", "억", "천만원", "천만", "백만원", "백만", "만원", "만", "원"]
+_MONEY_MULTIPLIER = {
+    "억원": 100_000_000, "억": 100_000_000,
+    "천만원": 10_000_000, "천만": 10_000_000,
+    "백만원": 1_000_000, "백만": 1_000_000,
+    "만원": 10_000, "만": 10_000, "원": 1,
+}
+_MONEY_RE = re.compile(rf"([\d,]+(?:\.\d+)?)\s*({'|'.join(_MONEY_UNITS)})")
+_MONEY_SYMBOL_RE = re.compile(r"₩\s*([\d,]+)")
+_MONEY_KRW_SUFFIX_RE = re.compile(r"([\d,]+)\s*(?:KRW|won)", re.IGNORECASE)
+_MONEY_KRW_PREFIX_RE = re.compile(r"(?:KRW)\s*([\d,]+)", re.IGNORECASE)
+# 한글로 적힌 금액은 안정적 변환이 어려워 '의심'으로 처리해 fail-closed 한다.
+# (1) 자릿수 단위(십백천만억조)가 '원' 앞에 오는 경우: 천 원, 만원, 스무만원, 구백구십구만원.
+#     '20만원'처럼 아라비아 숫자가 단위 앞에 붙으면 _MONEY_RE가 정상 파싱하므로 (?<![0-9])로 제외.
+_HANGUL_MONEY_RE = re.compile(r"(?<![0-9])[십백천만억조]\s*원")
+# (2) 자릿수 단위가 없는 한자어/고유어 수사 + 띄어쓰기 + 원: 일 원, 스무 원, 서른 원, 아흔아홉 원.
+#     '사원/구원/공원/지원/병원/위원/공무원'은 붙여 쓰고 '원' 앞이 수사 단독이 아니라 미탐된다
+#     (수사 토큰을 '단어 전체'로 매칭하므로 '공무원'의 '무'는 토큰이 아니어서 매칭되지 않는다).
+_KOREAN_NUMERAL_WORDS = [
+    "아흔", "여든", "일흔", "예순", "마흔", "서른", "스물", "스무",
+    "여덟", "일곱", "여섯", "다섯", "아홉", "하나",
+    "열", "쉰", "넷", "셋", "둘", "한", "두", "세", "네",
+    "십", "백", "천", "만", "억", "조",
+    "영", "공", "일", "이", "삼", "사", "오", "육", "륙", "칠", "팔", "구",
+]
+_NUMERAL_WORD = "(?:" + "|".join(_KOREAN_NUMERAL_WORDS) + ")"
+_HANGUL_MONEY_SPACED_RE = re.compile(rf"(?<![0-9])(?:{_NUMERAL_WORD})+\s+원")
+_MONTHS_RE = re.compile(r"(\d+)\s*개월")
+_YEARS_RE = re.compile(r"(?<!\d)(\d{1,2})\s*년")
+_DATE_RE = re.compile(r"(\d{4})\s*[년./\-]\s*(\d{1,2})\s*[월./\-]\s*(\d{1,2})")
+_MD_RE = re.compile(r"(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+_URL_RE = re.compile(r"https?://[^\s)\]}'\"]+")
+_DEADLINE_WORDS = ("마감", "종료", "까지")
+# 전체 기간 표현(A부터 B까지 / A ~ B / A - B). 날짜 내부 하이픈("2026-01-01")과 구분하려고
+# 하이픈은 공백으로 둘러싸인 경우만 범위 구분자로 본다.
+_RANGE_RE = re.compile(r"부터|[~∼]|\s[-–—]\s")
+
+
+_SIDO_ALIASES = {
+    "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천",
+    "광주광역시": "광주", "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종",
+    "경기도": "경기", "강원특별자치도": "강원", "강원도": "강원",
+    "충청북도": "충북", "충청남도": "충남", "전북특별자치도": "전북", "전라북도": "전북",
+    "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주",
+}
+
+
+def _normalize_sido_text(value: Any) -> str:
+    """시도 정식명을 추천/조건 비교에서 쓰는 짧은 이름으로 정규화한다(충청북도→충북)."""
+    text = _clean(value)
+    for long_name, short_name in _SIDO_ALIASES.items():
+        if long_name in text:
+            return short_name
+    return text
+
+
+def _money_won(number_text: str, unit: str) -> int | None:
+    try:
+        number = float(number_text.replace(",", ""))
+    except ValueError:
+        return None
+    multiplier = _MONEY_MULTIPLIER.get(unit)
+    return int(round(number * multiplier)) if multiplier else None
+
+
+def _digits_to_int(number_text: str) -> int | None:
+    cleaned = number_text.replace(",", "").strip()
+    return int(cleaned) if cleaned.isdigit() else None
+
+
+def extract_money(text: str) -> tuple[set[int], bool]:
+    """금액(원)을 추출한다. 반환: (원 단위 값 집합, 안전 해석 불가 여부).
+
+    한국어 단위(만원/억), ₩, KRW/won 접두·접미를 인식한다. 한글 수사 금액처럼 안전하게
+    변환할 수 없는 표현이 있으면 두 번째 값을 True로 두어 호출부가 fail-closed 하도록 한다.
+    """
+    text = text or ""
+    values: set[int] = set()
+    suspicious = False
+    for number_text, unit in _MONEY_RE.findall(text):
+        won = _money_won(number_text, unit)
+        if won:
+            values.add(won)
+        else:
+            suspicious = True
+    for regex in (_MONEY_SYMBOL_RE, _MONEY_KRW_SUFFIX_RE, _MONEY_KRW_PREFIX_RE):
+        for number_text in regex.findall(text):
+            value = _digits_to_int(number_text)
+            if value:
+                values.add(value)
+    if _HANGUL_MONEY_RE.search(text) or _HANGUL_MONEY_SPACED_RE.search(text):
+        suspicious = True
+    return values, suspicious
+
+
+def extract_duration_months(text: str) -> set[int]:
+    """개월/년을 개월 단위로 정규화한다('1년'=='12개월')."""
+    months = {int(value) for value in _MONTHS_RE.findall(text or "")}
+    months |= {int(value) * 12 for value in _YEARS_RE.findall(text or "")}
+    return months
+
+
+def _ordered_dates(text: str) -> list[tuple[int | None, int, int]]:
+    """등장 순서대로 (연|None, 월, 일)을 추출한다(범위의 종료일 식별용)."""
+    text = text or ""
+    items: list[tuple[int, tuple[int | None, int, int]]] = []
+    for match in _DATE_RE.finditer(text):
+        items.append((match.start(), (int(match.group(1)), int(match.group(2)), int(match.group(3)))))
+    # 연도 포함 날짜를 가린 뒤 '월 일'만 있는 부분을 따로 수집(중복 방지).
+    masked = _DATE_RE.sub(lambda m: " " * len(m.group(0)), text)
+    for match in _MD_RE.finditer(masked):
+        items.append((match.start(), (None, int(match.group(1)), int(match.group(2)))))
+    items.sort(key=lambda item: item[0])
+    return [date for _, date in items]
+
+
+def extract_dates(text: str) -> set[tuple[int | None, int, int]]:
+    """(연|None, 월, 일) 집합. 연도가 있으면 보존해 연도 불일치(2030 vs 2026)를 잡는다."""
+    return set(_ordered_dates(text))
+
+
+def extract_urls(text: str) -> set[str]:
+    return {url.rstrip(".,)") for url in _URL_RE.findall(text or "")}
+
+
+def mentions_deadline(text: str) -> bool:
+    return any(word in (text or "") for word in _DEADLINE_WORDS)
+
+
+def mentions_range(text: str) -> bool:
+    """전체 기간 표현(A부터 B까지 / A ~ B / A - B) 여부."""
+    return bool(_RANGE_RE.search(text or ""))
+
+
+def _date_matches(date: tuple[int | None, int, int], allowed: set[tuple[int | None, int, int]]) -> bool:
+    """답변 날짜가 허용 집합에 부합하는지. 연도가 있으면 연도까지 일치해야 한다."""
+    allowed_full = {item for item in allowed if item[0] is not None}
+    allowed_month_day = {(item[1], item[2]) for item in allowed}
+    year, month, day = date
+    if year is not None:
+        return (year, month, day) in allowed_full
+    return (month, day) in allowed_month_day
+
+
+def dates_are_grounded(
+    ordered_dates: list[tuple[int | None, int, int]],
+    all_dates: set[tuple[int | None, int, int]],
+    end_dates: set[tuple[int | None, int, int]],
+    *,
+    is_range: bool,
+    is_deadline: bool,
+) -> bool:
+    """역할별 날짜 검증.
+
+    - 전체 기간 표현(A부터 B까지): 시작 A는 all_dates, 종료 B는 end_dates, 중간은 all_dates.
+    - 단일 마감 표현(B까지/마감은 B): 모든 날짜가 end_dates와 일치.
+    - 그 외: 모든 날짜가 all_dates와 일치.
+    """
+    if not ordered_dates:
+        return True
+    if is_range and len(ordered_dates) >= 2:
+        start, *middle, end = ordered_dates
+        if not _date_matches(start, all_dates):
+            return False
+        if not _date_matches(end, end_dates):
+            return False
+        return all(_date_matches(date, all_dates) for date in middle)
+    target = end_dates if is_deadline else all_dates
+    return all(_date_matches(date, target) for date in ordered_dates)
 
 
 class PolicyChatAgent:
-    def __init__(self):
+    def __init__(self, response_planner: ResponsePlanner | None = None):
         self.db_path = find_db_path()
         self._context_cache: dict[str, dict[str, Any]] = {}
+        self.response_planner = response_planner or ResponsePlanner()
 
     def status(self) -> dict[str, Any]:
         return {
@@ -57,25 +239,60 @@ class PolicyChatAgent:
         normalized_messages = _normalize_messages(messages)
         question = _latest_user_message(normalized_messages)
         policy_context = self._load_policy_context(policy)
-        suggested_questions = self._suggest_questions(policy_context)
 
         if not question:
             return {
                 "answer": "궁금한 점을 한 문장으로 물어봐 주세요. 예: 이 정책 신청할 때 필요한 서류가 뭐야?",
-                "suggested_questions": suggested_questions,
+                "suggested_questions": self._suggest_questions(policy_context),
                 "policy_context": policy_context,
             }
+
+        intents = self._detect_intents(question)
+        primary_intent = intents[0] if intents else "overview"
+        conversation_context = [
+            {"role": message["role"], "content": message["content"]}
+            for message in normalized_messages[:-1]
+        ]
+        response_plan = self.response_planner.plan(
+            policy_context=policy_context,
+            intent=primary_intent,
+            question=question,
+            user_context=user_context or {},
+            conversation_context=conversation_context,
+        )
+        base_questions = self._suggest_questions(policy_context)
+        planned_follow_up = render_follow_up(response_plan, policy_context.get("source_label", "정책 DB"))
+        suggested_questions = [
+            planned_follow_up,
+            *(item for item in base_questions if item != planned_follow_up),
+        ][:3]
 
         try:
             answer = self._llm_answer(
                 policy_context=policy_context,
                 user_context=user_context or {},
                 messages=normalized_messages,
+                response_plan=response_plan,
             )
+            # LLM 응답에 DB로 검증 불가능한 금액·기간·날짜·URL이 있으면(환각) 폐기하고
+            # 같은 ResponsePlan으로 규칙 답변에 폴백한다. 프롬프트 강화만으로는 환각을 못 막는다.
+            if not self._llm_answer_is_grounded(answer, policy_context):
+                print("[ai.policy_chat_agent] LLM answer failed grounding check, using rule fallback")
+                answer = self._rule_answer(
+                    question,
+                    policy_context,
+                    user_context or {},
+                    response_plan,
+                )
         except Exception as exc:
             if not isinstance(exc, LLMUnavailable):
                 print(f"[ai.policy_chat_agent] LLM chat failed, using rule fallback: {exc}")
-            answer = self._rule_answer(question, policy_context, user_context or {})
+            answer = self._rule_answer(
+                question,
+                policy_context,
+                user_context or {},
+                response_plan,
+            )
 
         return {
             "answer": answer,
@@ -94,6 +311,14 @@ class PolicyChatAgent:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+            (table_name,),
+        )
+        return cursor.fetchone() is not None
 
     def _policy_cache_key(self, policy: dict[str, Any]) -> str:
         doc_id = _clean(policy.get("doc_id") or policy.get("policy_id"))
@@ -163,6 +388,26 @@ class PolicyChatAgent:
             "original": original,
             "facts": self._facts_for_source(source_table, search_doc, original),
         }
+        # lgcv는 search_documents에 통합되지 않고 원천이 welfare_chungbuk_local이라,
+        # 카드 ref만으로 들어오면 지역/대상/요약이 비어 자격·프로필 비교가 무력화된다.
+        # 이때는 원본 복지서비스 행에서 보강한다(시도는 충북으로 정규화).
+        if source_table in {"lgcv", "welfare_central"} and original:
+            if not context["region_sido"]:
+                context["region_sido"] = _normalize_sido_text(original.get("region_sido"))
+            if not context["region_sigungu"]:
+                context["region_sigungu"] = _clean(original.get("region_sigungu"))
+            if not context["region_name"]:
+                context["region_name"] = " ".join(
+                    part for part in [context["region_sido"], context["region_sigungu"]] if part
+                )
+            if not context["summary"]:
+                context["summary"] = _clean(original.get("summary") or original.get("support_content"))
+            if not context["target"]:
+                context["target"] = _clean(
+                    original.get("support_target")
+                    or original.get("target_group")
+                    or original.get("target_detail")
+                )
         context["policy_profile"] = self._build_user_summary(context)
 
         for cache_key in _dedupe([requested_cache_key, self._context_cache_key(context)]):
@@ -217,12 +462,16 @@ class PolicyChatAgent:
         if source_table not in SOURCE_KEY_COLUMNS:
             return {}
         key_column = SOURCE_KEY_COLUMNS[source_table]
+        # lgcv처럼 source_table과 원본 테이블명이 다른 경우를 해석한다.
+        original_table = SOURCE_ORIGINAL_TABLES.get(source_table, source_table)
+        if not self._table_exists(conn, original_table):
+            return {}
         cursor = conn.cursor()
         candidates = [source_id, _clean(search_doc.get("raw_ref") if search_doc else "")]
         for candidate in candidates:
             if not candidate:
                 continue
-            cursor.execute(f"SELECT * FROM {source_table} WHERE {key_column} = ? LIMIT 1", (candidate,))
+            cursor.execute(f"SELECT * FROM {original_table} WHERE {key_column} = ? LIMIT 1", (candidate,))
             row = cursor.fetchone()
             if row:
                 return dict(row)
@@ -274,6 +523,8 @@ class PolicyChatAgent:
             "smallloan_youth": "finPrdNm",
             "myhome_notices": "notice_name",
             "rental_houses": "hsmpNm",
+            "welfare_central": "service_name",
+            "lgcv": "service_name",
         }
         return _clean(original.get(title_keys.get(source_table, "")))
 
@@ -378,6 +629,21 @@ class PolicyChatAgent:
             _append(facts["apply"], "주소", original.get("rnAdres"))
             _append(facts["docs"], "준비할 것", "이 항목은 단지 정보라 실제 모집공고에서 신청 기간, 자격, 제출 서류를 별도로 확인해야 합니다.")
             _append(facts["contact"], "기관", original.get("insttNm"))
+        elif source_table in {"lgcv", "welfare_central"}:
+            # 복지로 계열 복지서비스(전국 welfare_central / 충북 lgcv=welfare_chungbuk_local).
+            _append(facts["benefit"], "지원 내용", original.get("support_content"))
+            _append(facts["eligibility"], "지원 대상", original.get("support_target") or original.get("target_detail") or original.get("target_group"))
+            _append(facts["eligibility"], "생애주기", original.get("life_cycle"))
+            _append(facts["eligibility"], "선정 기준", original.get("selection_criteria"))
+            _append(facts["apply"], "신청 방법", original.get("application_method") or original.get("application_method_type"))
+            _append(facts["apply"], "홈페이지", original.get("homepage") or original.get("service_url"))
+            _append(facts["docs"], "준비할 것", "복지서비스는 신분증과 함께 행정복지센터/공고에서 안내하는 신청서·증빙 서류를 확인하세요.")
+            _append(facts["contact"], "담당 부서", original.get("department") or original.get("responsible_agency"))
+            _append(facts["contact"], "문의처", original.get("contact") or original.get("inquiry_number"))
+            enforce_start = _date(original.get("enforcement_start_date"))
+            enforce_end = _date(original.get("enforcement_end_date"))
+            if enforce_start or enforce_end:
+                _append(facts["period"], "시행 기간", f"{enforce_start or '확인 필요'} ~ {enforce_end or '확인 필요'}")
 
         return {key: values for key, values in facts.items() if values}
 
@@ -410,6 +676,7 @@ class PolicyChatAgent:
         policy_context: dict[str, Any],
         user_context: dict[str, Any],
         messages: list[dict[str, str]],
+        response_plan: ResponsePlan,
     ) -> str:
         policy_profile = policy_context.get("policy_profile") or self._build_user_summary(policy_context)
         personal_fit = self._build_personal_fit(policy_context, user_context, policy_profile)
@@ -443,6 +710,15 @@ class PolicyChatAgent:
             "각 항목은 '- 주민등록등본'처럼 짧은 bullet로 쓰고, DB에 없는 내용은 추정하지 말고 확인 필요라고 쓴다. "
             "마지막에는 사용자가 이어서 물어볼 만한 한 가지 확인 질문을 던진다."
         )
+        system_prompt += (
+            "\n\n이번 턴의 응답 계획:\n"
+            f"{json.dumps(response_plan.to_dict(), ensure_ascii=False)}\n"
+            "focus를 첫 부분에서 다루고 section_order 순서로 설명하라. "
+            "detail_level이 compact면 이미 설명한 내용을 짧게 확인하고, focused면 질문한 세부사항에 집중하라. "
+            "repetition_mode가 confirm이면 장황하게 반복하지 말고 핵심만 재확인하라. "
+            "마지막 질문은 follow_up_kind에 해당하는 한 가지 질문만 사용하라. "
+            "이 계획은 표현 순서만 정하며 새로운 정책 사실을 만들 권한을 주지 않는다."
+        )
         context_message = {
             "role": "user",
             "content": (
@@ -458,42 +734,212 @@ class PolicyChatAgent:
             max_output_tokens=900,
         )
 
-    def _rule_answer(self, question: str, policy_context: dict[str, Any], user_context: dict[str, Any]) -> str:
+    def _date_grounding(
+        self, policy_context: dict[str, Any]
+    ) -> tuple[set[tuple[int | None, int, int]], set[tuple[int | None, int, int]]]:
+        """신청/운영 기간 필드에서만 날짜 근거를 모은다. (전체_기간_날짜, 종료_날짜).
+
+        collected_at·생성/수정일·ID 속 숫자는 마감 근거로 쓰지 않는다(전체 JSON에서 날짜를
+        긁지 않는 이유). 시작일만 같다고 마감을 허용하지 않도록 종료 날짜를 따로 모은다.
+        범위 문자열("YYYY-MM-DD ~ YYYY-MM-DD")은 마지막 날짜를 종료일로 파싱한다.
+        """
+        sd = policy_context.get("search_document") or {}
+        orig = policy_context.get("original") or {}
+        facts = policy_context.get("facts") or {}
+        start_fields = [sd.get("apply_start_date"), orig.get("apply_start_date"),
+                        orig.get("begin_date"), orig.get("tra_start_date")]
+        end_fields = [sd.get("apply_end_date"), orig.get("apply_end_date"),
+                      orig.get("end_date"), orig.get("tra_end_date"), orig.get("mgmDln")]
+        range_fields = [policy_context.get("period"), orig.get("apply_period"),
+                        orig.get("apply_period_type"), *facts.get("period", [])]
+
+        def _join(values):
+            return " ".join(str(value) for value in values if value)
+
+        end_dates = extract_dates(_join(end_fields))
+        all_dates = set(end_dates) | extract_dates(_join(start_fields))
+        for field in range_fields:
+            if not field:
+                continue
+            ordered = _ordered_dates(str(field))
+            if not ordered:
+                continue
+            all_dates |= set(ordered)
+            # 범위에 둘 이상의 날짜가 있으면 마지막을 종료일로 본다(단일 날짜는 종료로 단정 안 함).
+            if len(ordered) >= 2:
+                end_dates.add(ordered[-1])
+        return all_dates, end_dates
+
+    def _llm_answer_is_grounded(self, answer: str, policy_context: dict[str, Any]) -> bool:
+        """LLM 답변의 금액·기간·날짜·URL이 정책 DB 컨텍스트로 검증되는지 확인한다(fail-closed).
+
+        목록 번호(1./2.)·나이처럼 단위 없는 숫자는 검사 대상이 아니라 false positive를 만들지
+        않는다. 금액 표현을 안전하게 해석하지 못하거나(예: 한글 수사), 검증 불가능한 사실이
+        하나라도 있으면 False(→ 같은 ResponsePlan의 규칙 폴백)를 반환한다.
+        """
+        if not answer:
+            return True
+
+        # 금액: 단위 텍스트가 있는 곳만 근거로 본다(ID/나이 등 단위 없는 정수는 제외).
+        grounded_text = json.dumps(policy_context, ensure_ascii=False, default=str)
+        grounded_money, _ = extract_money(grounded_text)
+        grounded_months = extract_duration_months(grounded_text)
+        grounded_urls = extract_urls(grounded_text)
+        # 지원금 계산기(규칙)가 산출한 수치도 DB 근거에 포함한다(예: 총액 240만원).
+        try:
+            benefit = estimate_benefit(policy_context)
+        except Exception:
+            benefit = {}
+        for key in ("monthly_won", "total_won", "limit_won", "deposit_won", "monthly_rent_won", "course_won", "self_pay_won"):
+            value = benefit.get(key)
+            if isinstance(value, int) and value > 0:
+                grounded_money.add(value)
+        for key in ("months", "term_months", "lease_months"):
+            value = benefit.get(key)
+            if isinstance(value, int) and value > 0:
+                grounded_months.add(value)
+
+        answer_money, money_suspicious = extract_money(answer)
+        if money_suspicious:
+            return False
+        if not answer_money <= grounded_money:
+            return False
+        if not extract_duration_months(answer) <= grounded_months:
+            return False
+
+        ordered_dates = _ordered_dates(answer)
+        if ordered_dates:
+            all_dates, end_dates = self._date_grounding(policy_context)
+            if not dates_are_grounded(
+                ordered_dates,
+                all_dates,
+                end_dates,
+                is_range=mentions_range(answer),
+                is_deadline=mentions_deadline(answer),
+            ):
+                return False
+
+        if not extract_urls(answer) <= grounded_urls:
+            return False
+        return True
+
+    def _render_chat_sections(
+        self,
+        *,
+        title: str,
+        intent: str,
+        response_plan: ResponsePlan,
+        sections: dict[str, tuple[str, list[str]]],
+        source_label: str,
+        url: str = "",
+    ) -> str:
+        """정규 섹션 키 계약(ResponsePlanner.SECTION_KEYS)에 맞춰 계획 순서대로 렌더한다.
+
+        사용자가 직접 요청한 핵심 섹션(계획 section_order의 첫 키)이 비어 있으면 생략하지 않고
+        'DB 미기재 + 확인 링크' 안내를 표시한다(결함 4).
+        """
+        limit = section_item_limit(response_plan)
+        lines = [render_opening(title, intent, response_plan)]
+        primary = response_plan.section_order[0] if response_plan.section_order else ""
+        for key in ordered_section_keys(response_plan, sections):
+            heading, items = sections[key]
+            if not items:
+                if key == primary:
+                    if heading:
+                        lines.append(f"\n{heading}")
+                    lines.append("- DB에 직접 명시되지 않아 공식 공고나 담당 기관 확인이 필요합니다.")
+                    if url:
+                        lines.append(f"- 확인 링크: {url}")
+                continue
+            if heading:
+                lines.append(f"\n{heading}")
+            lines.extend(str(item) if str(item).startswith("- ") else f"- {item}" for item in items[:limit])
+
+        if not any(line.startswith("- ") for line in lines):
+            lines.append("- DB에 세부 정보가 부족해 상세 공고나 담당 기관 확인이 필요합니다.")
+            if url and not any("링크" in line or "URL" in line for line in lines):
+                lines.append(f"- 확인 링크: {url}")
+        lines.append(f"\n{render_follow_up(response_plan, source_label)}")
+        return "\n".join(lines)
+
+    def _missing_profile_answer(self, title: str, source_label: str, response_plan: ResponsePlan) -> str:
+        """프로필 부족으로 자격 판정을 못 할 때, 필요한 사용자 정보를 먼저 안내한다(결함 1b)."""
+        sections = {
+            "missing_info": ("먼저 필요한 정보", ["나이", "거주 지역", "취업 상태 등 정책별 조건"]),
+            "requirements": (
+                "확인 방법",
+                ["왼쪽 '조건 저장' 폼에 나이·거주 지역 등을 저장하면 정책 조건과 자동 비교합니다."],
+            ),
+        }
+        return self._render_chat_sections(
+            title=title,
+            intent="eligibility",
+            response_plan=response_plan,
+            sections=sections,
+            source_label=source_label,
+        )
+
+    def _rule_answer(
+        self,
+        question: str,
+        policy_context: dict[str, Any],
+        user_context: dict[str, Any],
+        response_plan: ResponsePlan,
+    ) -> str:
         intents = self._detect_intents(question)
         if not intents:
             intents = ["overview", "eligibility", "apply"]
 
         title = policy_context.get("title", "이 정책")
         source_label = policy_context.get("source_label", "정책 DB")
+        url = policy_context.get("url", "")
+
+        # 프로필 부족 자격 질문은 라우팅보다 먼저 — 필요한 사용자 정보를 우선 안내
+        if response_plan.focus == "missing_user_condition":
+            return self._missing_profile_answer(title, source_label, response_plan)
         if self._wants_apply_detail(question, intents):
-            return self._apply_detail_answer(title, policy_context, source_label, intents)
+            return self._apply_detail_answer(title, policy_context, source_label, intents, response_plan)
         if self._wants_structured_summary(question, intents):
-            return self._structured_answer(title, policy_context, source_label, intents, user_context)
+            return self._structured_answer(
+                title, policy_context, source_label, intents, user_context, response_plan
+            )
 
         facts = policy_context.get("facts", {})
-        lines = [f"**{title}** 기준으로 확인해봤어요."]
         summary = policy_context.get("policy_profile") or self._build_user_summary(policy_context)
         personal_fit = self._build_personal_fit(policy_context, user_context, summary)
+        # 의도 → 정규 섹션 키 / facts 버킷 / 기본 제목
+        canonical_by_intent = {
+            "docs": "documents", "benefit": "amount", "eligibility": "eligibility",
+            "apply": "method", "period": "period", "contact": "contact", "overview": "summary",
+        }
+        heading_by_key = {
+            "documents": "필요한 서류", "amount": "지원 금액", "eligibility": "조건",
+            "method": "신청 방법", "period": "신청 기간", "contact": "문의처", "summary": "정책 요약",
+        }
+        facts_by_key = {value: key for key, value in canonical_by_intent.items()}
+        sections: dict[str, tuple[str, list[str]]] = {}
         if personal_fit:
-            lines.append("\n내 조건 기준 체크")
-            for item in personal_fit[:5]:
-                lines.append(f"- {item}")
-
+            sections["personal_fit"] = ("내 조건 기준 체크", personal_fit)
         for intent in intents[:3]:
-            section = self._section_for_intent(intent, facts, policy_context)
-            if section:
-                lines.extend(section)
+            key = canonical_by_intent.get(intent, intent)
+            sections.setdefault(key, (heading_by_key.get(key, ""), facts.get(intent, [])))
+        # 사용자가 요청한 핵심 섹션(계획 1순위)은 비어 있어도 포함해 미기재 안내가 뜨게 한다
+        primary = response_plan.section_order[0] if response_plan.section_order else ""
+        if primary and primary not in sections:
+            facts_bucket = facts_by_key.get(primary)
+            sections[primary] = (
+                heading_by_key.get(primary, ""),
+                facts.get(facts_bucket, []) if facts_bucket else [],
+            )
 
-        if not any(line.startswith("- ") for line in lines):
-            lines.append("- DB에 세부 정보가 부족해서, 상세 공고 링크나 담당 기관 확인이 필요합니다.")
-
-        url = policy_context.get("url")
-        if url and not any("링크" in line or "URL" in line for line in lines):
-            lines.append(f"- 확인 링크: {url}")
-
-        follow_up = self._follow_up_question(intents[0], source_label)
-        lines.append(f"\n{follow_up}")
-        return "\n".join(lines)
+        return self._render_chat_sections(
+            title=title,
+            intent=intents[0],
+            response_plan=response_plan,
+            sections=sections,
+            source_label=source_label,
+            url=url,
+        )
 
     def _detect_intents(self, question: str) -> list[str]:
         intents = []
@@ -502,6 +948,9 @@ class PolicyChatAgent:
                 intents.append(intent)
         if "필요" in question and "서류" not in question:
             intents = ["docs", "eligibility", "apply"]
+        # 금액 중심 질문은 benefit을 우선한다 ("받을 수"가 eligibility로 먼저 잡히는 모호성 해소)
+        if "benefit" in intents and any(word in question for word in ("얼마", "금액", "총")):
+            intents = ["benefit", *(intent for intent in intents if intent != "benefit")]
         return intents
 
     def _wants_structured_summary(self, question: str, intents: list[str]) -> bool:
@@ -528,33 +977,27 @@ class PolicyChatAgent:
         policy_context: dict[str, Any],
         source_label: str,
         intents: list[str],
+        response_plan: ResponsePlan,
     ) -> str:
         summary = policy_context.get("policy_profile") or self._build_user_summary(policy_context)
         detail = self._build_apply_detail(policy_context, summary)
-        sections = [
-            ("1. 신청 경로/방법", detail["method"]),
-            ("2. 신청 기간/마감", detail["period"]),
-            ("3. 신청 링크/확인 페이지", detail["links"]),
-            ("4. 준비물/서류", detail["docs"]),
-            ("5. 문의처/담당 기관", detail["contact"]),
-        ]
-
-        lines = [f"**{title}** 신청 방법은 DB에서 찾은 내용 기준으로 이렇게 정리할 수 있어요."]
-        for heading, items in sections:
-            lines.append(f"\n{heading}")
-            if items:
-                for item in items[:6]:
-                    lines.append(f"- {item}")
-            else:
-                lines.append("- DB에 직접 명시된 내용이 없어 공고 링크나 담당 기관 확인이 필요해요.")
-
-        if detail["notes"]:
-            lines.append("\n확인 필요")
-            for item in detail["notes"][:4]:
-                lines.append(f"- {item}")
-
-        lines.append(f"\n{self._follow_up_question(intents[0] if intents else 'apply', source_label)}")
-        return "\n".join(lines)
+        # 정규 섹션 키(method/period/links/documents/contact/next_step)는 apply_how 계획과 일치한다.
+        sections = {
+            "method": ("신청 방법", detail["method"]),
+            "period": ("신청 기간", detail["period"]),
+            "links": ("신청 링크", detail["links"]),
+            "documents": ("준비물/서류", detail["docs"]),
+            "contact": ("문의처/담당 기관", detail["contact"]),
+            "next_step": ("확인 필요", detail["notes"]),
+        }
+        return self._render_chat_sections(
+            title=title,
+            intent="apply_how",
+            response_plan=response_plan,
+            sections=sections,
+            source_label=source_label,
+            url=policy_context.get("url", ""),
+        )
 
     def _structured_answer(
         self,
@@ -563,33 +1006,27 @@ class PolicyChatAgent:
         source_label: str,
         intents: list[str],
         user_context: dict[str, Any],
+        response_plan: ResponsePlan,
     ) -> str:
         summary = policy_context.get("policy_profile") or self._build_user_summary(policy_context)
         personal_fit = self._build_personal_fit(policy_context, user_context, summary)
-        sections = [
-            ("1. 필요한 서류", summary["docs"]),
-            ("2. 조건", summary["eligibility"]),
-            ("3. 지원 받을 수 있는 내용(금액)", summary["benefit"]),
-            ("4. 신청 방법/기간", summary["apply"]),
-        ]
-
-        lines = [f"**{title}**은 내 조건과 연결해서 보면 이렇게 이해하기 쉬워요."]
-        if personal_fit:
-            lines.append("\n내 조건 기준 체크")
-            for item in personal_fit[:6]:
-                lines.append(f"- {item}")
-        for heading, items in sections:
-            lines.append(f"\n{heading}")
-            for item in items[:6]:
-                lines.append(f"- {item}")
-
-        if summary["notice"]:
-            lines.append("\n확인 필요")
-            for item in summary["notice"][:3]:
-                lines.append(f"- {item}")
-
-        lines.append(f"\n{self._follow_up_question(intents[0] if intents else 'overview', source_label)}")
-        return "\n".join(lines)
+        # 정규 섹션 키로 매핑: 금액은 amount, 신청은 method (계획 section_order와 동일 어휘).
+        sections = {
+            "personal_fit": ("내 조건 기준 체크", personal_fit),
+            "documents": ("필요한 서류", summary["docs"]),
+            "eligibility": ("조건", summary["eligibility"]),
+            "amount": ("지원 받을 수 있는 내용(금액)", summary["benefit"]),
+            "method": ("신청 방법/기간", summary["apply"]),
+            "next_step": ("확인 필요", summary["notice"]),
+        }
+        return self._render_chat_sections(
+            title=title,
+            intent=intents[0] if intents else "overview",
+            response_plan=response_plan,
+            sections=sections,
+            source_label=source_label,
+            url=policy_context.get("url", ""),
+        )
 
     def _build_user_summary(self, policy_context: dict[str, Any]) -> dict[str, list[str]]:
         source_table = policy_context.get("source_table")

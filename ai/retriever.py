@@ -50,7 +50,8 @@ INTEREST_DOMAINS = {
     "취업": ["policy_job", "training"],
     "창업": ["policy_startup", "startup"],
     "문화": ["policy"],
-    "복지": ["policy", "policy_finance"],
+    # welfare는 전국(welfare_central)·충북(lgcv) 복지서비스를 모두 포함한다.
+    "복지": ["policy", "policy_finance", "welfare"],
 }
 
 DOMAIN_QUOTAS = {
@@ -59,6 +60,7 @@ DOMAIN_QUOTAS = {
     "교육": {"policy_training": 2, "training": 3},
     "취업": {"policy_job": 2, "training": 3},
     "창업": {"policy_startup": 2, "startup": 3},
+    "복지": {"welfare": 3, "policy_finance": 1, "policy": 1},
 }
 
 REGION_ALIASES = {
