@@ -5,7 +5,7 @@ import sys
 import uuid
 
 from backend.config import CENTER_COLUMNS, POLICY_COLUMNS, POLICY_PROCESSED_COLUMNS
-from backend.region_map import get_region_code
+from backend.region_map import get_region_codes
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -296,14 +296,16 @@ def get_centers_by_region(region: str) -> list:
 
 
 def get_policies_by_region(sido: str, sigungu: str) -> list:
-    code = get_region_code(sido, sigungu)
-    if not code:
+    codes = get_region_codes(sido, sigungu)
+    if not codes:
         return []
     conn = get_connection()
     cursor = conn.cursor()
+    # 코드 개수만큼 placeholder를 만들어 OR LIKE로 검색한다(통합 시의 하위 구 코드 포함).
+    where = " OR ".join(["region LIKE ?"] * len(codes))
     cursor.execute(
-        "SELECT * FROM policies_processed WHERE region LIKE ?",
-        (f"%{code}%",),
+        f"SELECT * FROM policies_processed WHERE {where}",
+        [f"%{code}%" for code in codes],
     )
     rows = cursor.fetchall()
     conn.close()

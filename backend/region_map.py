@@ -150,6 +150,7 @@ REGION_CODE_MAP = {
         "양평군": "41830",
     },
     "충북": {
+        "청주시": "43110",
         "상당구": "43111",
         "서원구": "43112",
         "흥덕구": "43113",
@@ -318,6 +319,27 @@ def get_sido_list() -> list:
 def get_sigungu_list(sido: str) -> list:
     """해당 시도의 자치구 목록 반환 (Streamlit 드롭다운용)"""
     return list(REGION_CODE_MAP.get(sido, {}).keys())
+
+
+# 통합 시(대표 코드)와 그 하위 자치구 코드 매핑.
+# 예: 청주시(43110)는 DB에 상당구/서원구/흥덕구/청원구(43111~43114) 코드로 저장되어 있어,
+# 대표 코드만으로 검색하면 실제 정책을 놓친다. get_region_codes()가 하위 코드까지 함께 반환한다.
+AGGREGATE_REGION_CHILD_CODES = {
+    ("충북", "청주시"): ["43111", "43112", "43113", "43114"],
+}
+
+
+def get_region_codes(sido: str, sigungu: str) -> list[str]:
+    """시도+시군구의 검색용 코드 목록 반환.
+
+    대표 코드(get_region_code)에 더해, 통합 시의 경우 하위 자치구 코드까지 포함한다.
+    매칭 가능한 코드가 없으면 빈 리스트.
+    """
+    code = get_region_code(sido, sigungu)
+    if not code:
+        return []
+    child_codes = AGGREGATE_REGION_CHILD_CODES.get((sido, sigungu), [])
+    return [code, *child_codes]
 
 # 역방향 매핑: 법정동 코드 → 시도명
 # 예: "11110" → "서울", "26110" → "부산"

@@ -23,7 +23,7 @@ NO_CONDITION_MESSAGE = (
 
 # 충청북도 별칭과 시군구명. 사용자 조건에 이 중 하나라도 들어오면 충북으로 본다.
 CHUNGBUK_ALIASES = ("충북", "충청북도")
-CHUNGBUK_SIGUNGU = tuple(REGION_CODE_MAP.get("충북", {}).keys()) + ("청주시",)
+CHUNGBUK_SIGUNGU = tuple(REGION_CODE_MAP.get("충북", {}).keys())
 
 
 def _clean(value) -> str:

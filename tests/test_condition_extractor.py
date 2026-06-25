@@ -31,7 +31,7 @@ class ConditionExtractorTest(unittest.TestCase):
         self.assertEqual(condition.get("interest"), "금융")
 
     def test_extracts_chungbuk_cheongju_sigungu(self):
-        # REGION_CODE_MAP의 충북에는 청주시가 구 단위로만 있어 보충 인식이 필요하다.
+        # REGION_CODE_MAP["충북"]에 "청주시"가 정식 등록되어 있어 추출된다.
         condition = extract_user_condition("충북 청주시 24살 대학생 월세 지원 알려줘")
         self.assertEqual(condition.get("region_sido"), "충북")
         self.assertEqual(condition.get("region_sigungu"), "청주시")
