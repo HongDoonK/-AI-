@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, ExternalLink, Search, Send } from 'lucide-react';
+import { ClipboardList, ExternalLink, Search, Send } from 'lucide-react';
 import { displayValue, getPossibilityClass } from '../appConfig.js';
 import { getScoreMood } from '../scoreMood.js';
 
@@ -62,7 +62,7 @@ export default function PolicyCard({ policy, index, onChat, onPrepare, onApply }
           <h4>신청 체크리스트</h4>
           <ul className="check-list">
             {checklist.map((item, idx) => (
-              <li key={`${item}-${idx}`}><CheckCircle2 size={16} /><span>{item}</span></li>
+              <li key={`${item}-${idx}`}><span>{item}</span></li>
             ))}
           </ul>
         </section>

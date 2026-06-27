@@ -16,16 +16,19 @@ export function parsePolicyDeadline(period) {
 
 export function buildPolicyChecklist(policy) {
   const base = Array.isArray(policy?.checklist) ? policy.checklist.filter(Boolean) : [];
+  if (base.length >= 3) return [...new Set(base)].slice(0, 6);
+
   const period = text(policy?.application_period);
   const url = text(policy?.application_url || policy?.url || policy?.ref_url);
-  const items = [
-    period ? `신청 기간 확인: ${period}` : '신청 기간 확인 필요',
-    '자격 조건과 지역 조건 다시 확인하기',
-    '주민등록등본, 신분증, 소득 증빙 등 기본 서류 준비하기',
-    url ? '신청 링크에서 접수 절차 확인하기' : '신청 링크 또는 담당 기관 확인하기',
-    ...base,
-  ];
-  return [...new Set(items)];
+  const policyName = text(policy?.policy_name);
+  const regionMatch = text(policy?.region_match);
+  const fillers = [
+    period ? `신청 기간 확인: ${period}` : (policyName ? `'${policyName}' 신청 기간 확인` : '신청 기간 확인 필요'),
+    regionMatch ? `지역 조건 확인: ${regionMatch}` : null,
+    url ? '신청 링크에서 접수 절차 확인하기' : null,
+  ].filter(Boolean);
+
+  return [...new Set([...fillers, ...base])].slice(0, 6);
 }
 
 export function buildAgentReport(recommendations, today = new Date()) {

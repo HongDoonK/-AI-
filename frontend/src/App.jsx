@@ -20,7 +20,7 @@ import {
   Send,
   UserRound,
 } from 'lucide-react';
-import { buildAgentReport } from './agentPlanner.js';
+import { buildAgentReport, parsePolicyDeadline } from './agentPlanner.js';
 import { calculateIncomeTax } from './incomeTax.js';
 import { convertToMedianIncomePercent } from './medianIncome.js';
 import { findIneligiblePolicies } from './eligibilityCheck.js';
@@ -99,6 +99,57 @@ const REGION_OPTIONS = {
   제주: ['제주시', '서귀포시'],
 };
 
+function isSigunguInSido(sigungu, sido) {
+  if (!sigungu || !sido) return false;
+  const options = REGION_OPTIONS[sido];
+  return Array.isArray(options) && options.includes(sigungu);
+}
+
+function normalizeRegionPair(sido = '', sigungu = '') {
+  const region_sido = String(sido || '').trim();
+  let region_sigungu = String(sigungu || '').trim();
+  if (region_sido && region_sigungu && !isSigunguInSido(region_sigungu, region_sido)) {
+    region_sigungu = '';
+  }
+  return { region_sido, region_sigungu };
+}
+
+function parseRegionFromQuery(query = '') {
+  const q = String(query || '');
+  let region_sido = '';
+  let region_sigungu = '';
+
+  if (/충북|충청북/.test(q)) region_sido = '충북';
+  if (q.includes('청주')) region_sigungu = '청주시';
+  else if (q.includes('충주')) region_sigungu = '충주시';
+  else if (q.includes('제천')) region_sigungu = '제천시';
+
+  return normalizeRegionPair(region_sido, region_sigungu);
+}
+
+function resolveDemoRegion(query, profile) {
+  const fromQuery = parseRegionFromQuery(query);
+  const profilePair = normalizeRegionPair(profile?.region_sido, profile?.region_sigungu);
+
+  if (fromQuery.region_sido) {
+    return {
+      region_sido: fromQuery.region_sido,
+      region_sigungu: fromQuery.region_sigungu || '청주시',
+    };
+  }
+
+  if (profilePair.region_sido === '충북') {
+    return {
+      region_sido: '충북',
+      region_sigungu: profilePair.region_sigungu || '청주시',
+    };
+  }
+
+  const q = String(query || '');
+  const sigungu = q.includes('충주') ? '충주시' : q.includes('제천') ? '제천시' : '청주시';
+  return { region_sido: '충북', region_sigungu: sigungu };
+}
+
 function resolveApiBaseUrl(value) {
   if (value) {
     const raw = String(value).replace(/\/$/, '');
@@ -170,20 +221,12 @@ function DetailSectionCard({ title, children }) {
   );
 }
 
-function ExpandableSummary({ text, fallback = '내용 확인 필요', maxChars = 140 }) {
-  const [expanded, setExpanded] = useState(false);
+function ExpandableSummary({ text, fallback = '내용 확인 필요' }) {
   const raw = text === null || text === undefined || String(text).trim() === '' ? fallback : String(text);
-  const needsToggle = raw.length > maxChars;
-  const shown = needsToggle && !expanded ? `${raw.slice(0, maxChars).trim()}…` : raw;
 
   return (
     <div className="detail-expand-block">
-      <p className="detail-card-text">{shown}</p>
-      {needsToggle && (
-        <button className="detail-expand-button" type="button" onClick={() => setExpanded((prev) => !prev)}>
-          {expanded ? '접기' : '더보기'}
-        </button>
-      )}
+      <p className="detail-card-text">{raw}</p>
     </div>
   );
 }
@@ -193,46 +236,158 @@ function displayValue(value, fallback = '확인 필요') {
   return value;
 }
 
+function getPolicySupportOriginal(policy) {
+  return policy?.support_content || policy?.description || '';
+}
+
+function getPolicyDescriptionOriginal(policy) {
+  const description = String(policy?.description || '').trim();
+  const support = String(policy?.support_content || '').trim();
+  if (!description || description === support) return '';
+  return description;
+}
+
 function regionLabel(profile) {
-  if (profile?.region_sido) {
-    return profile.region_sigungu ? `${profile.region_sido} ${profile.region_sigungu}` : profile.region_sido;
+  const { region_sido, region_sigungu } = normalizeRegionPair(profile?.region_sido, profile?.region_sigungu);
+  if (region_sido) {
+    return region_sigungu ? `${region_sido} ${region_sigungu}` : region_sido;
   }
   return '지역 미설정';
 }
 
-function getRegionForCenters(profile, userCondition = {}) {
-  const regionText = [
-    userCondition.region_sido,
-    userCondition.region_sigungu,
-    userCondition.region,
-    profile?.region_sido,
-    profile?.region_sigungu,
+function isPlaceholderPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return true;
+  if (/^0+$/.test(digits)) return true;
+  if (/0{4,}$/.test(digits) && digits.length >= 7) return true;
+  return false;
+}
+
+function getCenterPhone(center, centers = []) {
+  const candidates = [
+    center?.center_tel,
+    center?.tel,
+    center?.cntrTelno,
+    center?.phone,
   ]
     .filter(Boolean)
-    .join(' ');
-  return regionText || '충북';
+    .map((value) => String(value).trim());
+
+  for (const tel of candidates) {
+    if (!isPlaceholderPhone(tel)) return tel;
+  }
+
+  const name = String(center?.center_name || '').trim();
+  if (!name) return '';
+
+  for (const other of centers) {
+    if (String(other?.center_name || '').trim() !== name) continue;
+    for (const field of [other.center_tel, other.tel, other.cntrTelno, other.phone]) {
+      const tel = String(field || '').trim();
+      if (tel && !isPlaceholderPhone(tel)) return tel;
+    }
+  }
+
+  return '';
 }
 
-const DEFAULT_YOUTH_CENTERS = [
-  {
-    center_name: '충북청년희망센터',
-    center_addr: '충청북도 청주시',
-    center_tel: '043-000-0000',
-    center_url: 'https://www.chungbuk.go.kr/young/index.do',
-  },
-];
+function normalizeCenterRecord(center, centers = []) {
+  const phone = getCenterPhone(center, centers);
+  return {
+    ...center,
+    center_tel: phone || center?.center_tel || '',
+  };
+}
+
+function getRegionForCenters(profile, userCondition = {}) {
+  const sido = userCondition.region_sido || profile?.region_sido || '';
+  const sigungu = userCondition.region_sigungu || profile?.region_sigungu || '';
+  const { region_sido: cleanSido, region_sigungu: cleanSigungu } = normalizeRegionPair(sido, sigungu);
+  const region = String(userCondition.region || '').trim();
+
+  if (cleanSido && cleanSigungu) return `${cleanSido} ${cleanSigungu}`;
+  if (cleanSido) return cleanSido;
+  if (cleanSigungu) return cleanSigungu;
+
+  if (region) {
+    const tokens = region.split(/\s+/).filter(Boolean);
+    const unique = [];
+    for (const token of tokens) {
+      if (!unique.includes(token)) unique.push(token);
+    }
+    return unique.join(' ') || '충북';
+  }
+
+  return '충북';
+}
+
+function isApplicationPeriodUnknown(policy) {
+  const period = policy?.application_period || policy?.apply_period;
+  if (!period || String(period).trim() === '') return true;
+  return parsePolicyDeadline(period) === null;
+}
 
 function getDisplayCenters(centers) {
-  return Array.isArray(centers) && centers.length > 0 ? centers : DEFAULT_YOUTH_CENTERS;
+  if (!Array.isArray(centers) || centers.length === 0) return [];
+  return centers.map((center) => normalizeCenterRecord(center, centers));
 }
 
-function YouthCenterCard({ regionText, center, onViewCenters, buttonLabel = '센터 보기' }) {
+function PolicyCalendarAction({ policy, today = new Date(), compact = false }) {
+  const calendarEvent = useMemo(
+    () => buildSavedCalendarEvents([policy], today)[0],
+    [policy, today],
+  );
+  const canRegister = calendarEvent?.deadlineStatus !== 'needs_date_check' && Boolean(calendarEvent?.deadlineAt);
+
+  function handleRegister() {
+    if (!canRegister) return;
+    downloadIcsFile([calendarEvent], `policy-${policyKey(policy)}.ics`);
+  }
+
+  return (
+    <div className={`policy-calendar-action${compact ? ' compact' : ''}`}>
+      <button
+        type="button"
+        className="detail-calendar-button"
+        disabled={!canRegister}
+        onClick={handleRegister}
+      >
+        <CalendarDays size={16} aria-hidden="true" />
+        캘린더 등록
+      </button>
+      {!canRegister && <p className="policy-calendar-note">신청기간 확인 필요</p>}
+    </div>
+  );
+}
+
+function YouthCenterCard({ regionLabel, centers, onViewCenters, buttonLabel = '자세히 보기' }) {
+  const displayCenters = getDisplayCenters(centers);
+
   return (
     <section className="youth-center-card">
       <p className="youth-center-eyebrow">가까운 청년센터</p>
       <p className="youth-center-copy">정책 신청이 헷갈리면 가까운 청년센터에서 상담을 받을 수 있어요.</p>
-      <p className="youth-center-region">{regionText} 기준 상담센터 안내</p>
-      {center?.center_name && <p className="youth-center-name">{center.center_name}</p>}
+      <p className="youth-center-region">{regionLabel} 기준 상담센터 안내</p>
+      {displayCenters.length === 0 ? (
+        <p className="youth-center-empty">불러온 청년센터 정보가 없습니다. 전체 센터 화면에서 다시 확인해 보세요.</p>
+      ) : (
+        <div className="youth-center-list">
+          {displayCenters.map((center, index) => {
+            const phone = getCenterPhone(center, displayCenters);
+            return (
+              <article className="youth-center-item" key={`${center.center_name || 'center'}-${index}`}>
+                <h4 className="youth-center-name">{displayValue(center.center_name, '센터명 확인 필요')}</h4>
+                <p className="youth-center-address">{displayValue(center.center_addr, '주소 확인 필요')}</p>
+                {phone ? (
+                  <a className="youth-center-tel" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>{phone}</a>
+                ) : (
+                  <p className="youth-center-tel-missing">전화번호 확인 필요</p>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
       <button className="youth-center-button" type="button" onClick={onViewCenters}>{buttonLabel}</button>
     </section>
   );
@@ -813,7 +968,7 @@ function PolicyCard({ policy, index, onChat, onPrepare }) {
           <h4>신청 체크리스트</h4>
           <ul className="check-list">
             {checklist.map((item, idx) => (
-              <li key={`${item}-${idx}`}><CheckCircle2 size={16} /><span>{item}</span></li>
+              <li key={`${item}-${idx}`}><span>{item}</span></li>
             ))}
           </ul>
         </section>
@@ -998,6 +1153,7 @@ function ResultsScreen({
   onNavigate,
   onSelectPolicy,
   onSavePolicy,
+  today,
 }) {
   return (
     <main className="mobile-shell results-screen">
@@ -1027,6 +1183,7 @@ function ResultsScreen({
                 <p className="result-card-reason">
                   {displayValue(policy.recommend_reason || policy.reason || policy.support_summary, '추천 이유를 확인 중입니다.')}
                 </p>
+                <PolicyCalendarAction policy={policy} today={today} compact />
                 <div className="result-card-actions">
                   <button type="button" className="result-detail-button" onClick={() => onSelectPolicy(policy, 'detail')}>자세히 보기</button>
                   <button
@@ -1057,6 +1214,7 @@ function DetailScreen({
   onSelectPolicy,
   onViewCenters,
   onApplyAssistant,
+  today,
 }) {
   if (!policy) {
     return (
@@ -1073,9 +1231,14 @@ function DetailScreen({
   const rankLabel = policyIndex >= 0 ? `추천 정책 ${policyIndex + 1}` : '관심 정책';
   const possibility = getPossibilityDisplay(policy.apply_possibility);
   const keywords = buildRecommendKeywords(policy);
-  const supportText = policy.support_summary || policy.support_content;
-  const reasonText = policy.recommend_reason || policy.reason || supportText;
+  const supportText = getPolicySupportOriginal(policy) || policy.support_summary;
+  const descriptionText = getPolicyDescriptionOriginal(policy);
+  const applyMethodText = policy.apply_method || '';
+  const applyConditionText = policy.apply_condition || '';
+  const submitDocsText = policy.submit_docs || '';
+  const reasonText = policy.recommend_reason || policy.reason || policy.support_summary || supportText;
   const periodText = displayValue(policy.application_period || policy.apply_period, '신청 기간 확인 필요');
+  const periodUnknown = isApplicationPeriodUnknown(policy);
 
   return (
     <main className="mobile-shell detail-page">
@@ -1089,8 +1252,9 @@ function DetailScreen({
             <span className="detail-score-emoji" aria-hidden="true">{possibility.emoji}</span>
             <span className={getPossibilityClass(policy.apply_possibility)}>{possibility.label}</span>
           </div>
-          <span className="detail-period-pill">{periodText}</span>
+          <span className={`detail-period-pill${periodUnknown ? ' is-unknown' : ''}`}>{periodText}</span>
         </div>
+        <PolicyCalendarAction policy={policy} today={today} />
       </article>
 
       <div className="detail-card-stack">
@@ -1100,19 +1264,36 @@ function DetailScreen({
               <li key={`${keyword}-${index}`}>{keyword}</li>
             ))}
           </ul>
-          <ExpandableSummary text={reasonText} fallback="추천 근거를 확인 중입니다." maxChars={120} />
+          <ExpandableSummary text={reasonText} fallback="추천 근거를 확인 중입니다." />
         </DetailSectionCard>
 
-        <DetailSectionCard title="지원 내용 요약">
+        <DetailSectionCard title="지원 내용">
           <ExpandableSummary text={supportText} fallback="지원 내용을 확인 중입니다." />
         </DetailSectionCard>
+
+        {descriptionText && (
+          <DetailSectionCard title="정책 설명">
+            <ExpandableSummary text={descriptionText} fallback="정책 설명을 확인 중입니다." />
+          </DetailSectionCard>
+        )}
+
+        {applyConditionText && (
+          <DetailSectionCard title="신청 자격">
+            <ExpandableSummary text={applyConditionText} fallback="신청 자격을 확인 중입니다." />
+          </DetailSectionCard>
+        )}
+
+        {submitDocsText && (
+          <DetailSectionCard title="제출 서류">
+            <ExpandableSummary text={submitDocsText} fallback="제출 서류를 확인 중입니다." />
+          </DetailSectionCard>
+        )}
 
         {checklist.length > 0 && (
           <DetailSectionCard title="신청 체크리스트">
             <ul className="detail-checklist">
               {checklist.map((item, index) => (
                 <li key={`${item}-${index}`}>
-                  <CheckCircle2 size={16} aria-hidden="true" />
                   <span>{item}</span>
                 </li>
               ))}
@@ -1121,7 +1302,7 @@ function DetailScreen({
         )}
 
         <DetailSectionCard title="신청 방법">
-          <ExpandableSummary text={policy.apply_method} fallback="공고문 또는 담당 기관에서 확인해주세요." maxChars={120} />
+          <ExpandableSummary text={applyMethodText} fallback="공고문 또는 담당 기관에서 확인해주세요." />
           {url ? (
             <a className="detail-apply-link" href={url} target="_blank" rel="noreferrer">
               공식 신청 링크 열기 <ExternalLink size={14} />
@@ -1133,10 +1314,10 @@ function DetailScreen({
       </div>
 
       <YouthCenterCard
-        regionText={getRegionForCenters(profile, userCondition)}
-        center={getDisplayCenters(centers)[0]}
+        regionLabel={getRegionForCenters(profile, userCondition)}
+        centers={centers}
         onViewCenters={onViewCenters}
-        buttonLabel="센터 보기"
+        buttonLabel="자세히 보기"
       />
 
       <div className="detail-action-bar" aria-label="정책 액션">
@@ -1567,30 +1748,45 @@ function ChatScreen({
   );
 }
 
-function CenterScreen({ regionText, centers, onNavigate, backTo = 'home' }) {
+function CenterScreen({ regionLabel, centers, onNavigate, backTo = 'home' }) {
+  const displayCenters = getDisplayCenters(centers);
+
   return (
     <main className="mobile-shell center-screen">
       <MobileHeader title="청년센터" backTo={backTo} onNavigate={onNavigate} />
       <section className="center-intro-card">
         <span className="home-hero-badge">충북 청년정책 도우미</span>
-        <h2>{regionText} 지역 청년센터</h2>
+        <h2>{regionLabel} 지역 청년센터</h2>
         <p>정책 신청이 헷갈리면 가까운 청년센터에서 상담을 받을 수 있어요.</p>
       </section>
       <section className="center-list">
-        {centers.map((center, index) => (
-          <article className="center-item-card" key={`${center.center_name || 'center'}-${index}`}>
-            <h3>{displayValue(center.center_name, '센터명 확인 필요')}</h3>
-            <p>{displayValue(center.center_addr, '주소 확인 필요')}</p>
-            {center.center_tel && <p className="center-item-tel">{center.center_tel}</p>}
-            {center.center_url ? (
-              <a className="detail-apply-link" href={center.center_url} target="_blank" rel="noreferrer">
-                상담 연결 <ExternalLink size={14} />
-              </a>
-            ) : (
-              <p className="detail-apply-link-missing">센터 연락처는 데이터에서 확인 필요</p>
-            )}
-          </article>
-        ))}
+        {displayCenters.length === 0 ? (
+          <p className="center-empty">현재 표시할 청년센터 정보가 없습니다. 추천을 다시 실행하거나 잠시 후 다시 확인해 주세요.</p>
+        ) : (
+          displayCenters.map((center, index) => {
+            const phone = getCenterPhone(center, displayCenters);
+            return (
+              <article className="center-item-card" key={`${center.center_name || 'center'}-${index}`}>
+                <h3>{displayValue(center.center_name, '센터명 확인 필요')}</h3>
+                <p className="center-item-address">{displayValue(center.center_addr, '주소 확인 필요')}</p>
+                <div className="center-item-contact">
+                  {phone ? (
+                    <a className="center-item-tel" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>{phone}</a>
+                  ) : (
+                    <p className="center-item-tel-missing">전화번호 확인 필요</p>
+                  )}
+                  {center.center_url ? (
+                    <a className="detail-apply-link" href={center.center_url} target="_blank" rel="noreferrer">
+                      상담 연결 <ExternalLink size={14} />
+                    </a>
+                  ) : (
+                    <p className="detail-apply-link-missing">센터 연락처는 데이터에서 확인 필요</p>
+                  )}
+                </div>
+              </article>
+            );
+          })
+        )}
       </section>
     </main>
   );
@@ -2109,6 +2305,7 @@ export default function App() {
         onNavigate={go}
         onSelectPolicy={selectPolicy}
         onSavePolicy={savePolicy}
+        today={today}
       />
     ),
     detail: (
@@ -2123,6 +2320,7 @@ export default function App() {
         onSelectPolicy={selectPolicy}
         onViewCenters={() => openCenters('detail')}
         onApplyAssistant={openApplyAssistant}
+        today={today}
       />
     ),
     apply: (
@@ -2186,8 +2384,8 @@ export default function App() {
     ),
     centers: (
       <CenterScreen
-        regionText={getRegionForCenters(profile, data.user_condition)}
-        centers={getDisplayCenters(data.centers)}
+        regionLabel={getRegionForCenters(profile, data.user_condition)}
+        centers={data.centers}
         backTo={centersBackTo}
         onNavigate={go}
       />
@@ -2213,8 +2411,7 @@ export default function App() {
 }
 
 function buildDemoResult(query, profile) {
-  const conditionRegion = profile?.region_sido || (query?.includes('충북') ? '충북' : '충북');
-  const sigungu = profile?.region_sigungu || (query?.includes('충주') ? '충주시' : query?.includes('제천') ? '제천시' : '청주시');
+  const { region_sido: conditionRegion, region_sigungu: sigungu } = resolveDemoRegion(query, profile);
   return {
     user_condition: {
       age: profile?.age || 24,
@@ -2228,7 +2425,13 @@ function buildDemoResult(query, profile) {
       {
         center_name: '충북청년희망센터',
         center_addr: '충청북도 청주시 상당구 일원',
-        center_tel: '043-000-0000',
+        center_tel: '043-201-6114',
+        center_url: 'https://www.chungbuk.go.kr/young/index.do',
+      },
+      {
+        center_name: '충주시청년센터',
+        center_addr: '충청북도 충주시',
+        center_tel: '043-850-6114',
         center_url: 'https://www.chungbuk.go.kr/young/index.do',
       },
     ],
@@ -2245,8 +2448,11 @@ function buildDemoResult(query, profile) {
         match_method: 'FAISS',
         match_score_label: '0.89',
         match_badges: ['충북 지역 조건', '월세·주거비 관심', '24세 청년'],
+        region_sido: conditionRegion,
+        region_sigungu: sigungu,
         region_match: `${conditionRegion} ${sigungu}`,
-        application_period: '상시 또는 지자체 공고 확인 필요',
+        application_period: '20260101 ~ 20261231',
+        apply_period: '20260101 ~ 20261231',
         application_url: 'https://www.youthcenter.go.kr',
         recommend_reason: '충북에 거주하는 20대 청년의 월세 부담 완화 목적과 입력 조건이 가장 가깝습니다.',
         support_summary: '월세 부담을 줄이기 위한 주거비 지원 정책입니다.',
@@ -2265,6 +2471,8 @@ function buildDemoResult(query, profile) {
         match_method: '키워드/벡터 혼합',
         match_score_label: '0.76',
         match_badges: ['취업 준비', '직무훈련', '전국 단위'],
+        region_sido: '전국',
+        region_sigungu: '',
         region_match: '전국 단위 정책',
         application_period: '훈련 과정별 상이',
         application_url: 'https://www.hrd.go.kr',
@@ -2285,6 +2493,8 @@ function buildDemoResult(query, profile) {
         match_method: '도메인 힌트',
         match_score_label: '0.71',
         match_badges: ['창업 관심', '사업화 자금', '공고 확인 필요'],
+        region_sido: conditionRegion,
+        region_sigungu: sigungu,
         region_match: '충북 또는 전국 공고 우선 확인',
         application_period: '공고별 상이',
         application_url: 'https://www.k-startup.go.kr',
@@ -2305,6 +2515,8 @@ function buildDemoResult(query, profile) {
         match_method: '유사도 검색',
         match_score_label: '0.64',
         match_badges: ['생활비', '금융', '소득 조건 확인'],
+        region_sido: '전국',
+        region_sigungu: '',
         region_match: '전국 또는 지자체 공고 확인',
         application_period: '기관별 상이',
         application_url: 'https://www.youthcenter.go.kr',
@@ -2325,6 +2537,8 @@ function buildDemoResult(query, profile) {
         match_method: '지역 매칭',
         match_score_label: '0.82',
         match_badges: ['충북', '상담', '정책 매칭'],
+        region_sido: conditionRegion,
+        region_sigungu: sigungu,
         region_match: `${conditionRegion} ${sigungu}`,
         application_period: '운영시간 확인 필요',
         application_url: 'https://www.chungbuk.go.kr/young/index.do',
