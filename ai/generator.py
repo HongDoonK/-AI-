@@ -612,6 +612,7 @@ def generate_recommendations_rule_based(user_input: str, user_condition: dict, t
             "support_content": support_summary,
             "support_summary": support_summary,
             "application_period": _clean(row.get("apply_period")),
+            "apply_period": _clean(row.get("apply_period")),
             "application_url": _clean(row.get("application_url")) or _clean(row.get("ref_url1")),
             "checklist": _checklist(row)[:5],
         }

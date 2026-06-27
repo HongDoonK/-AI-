@@ -63,11 +63,12 @@ def _normalize_search_documents(df: pd.DataFrame) -> pd.DataFrame:
     normalized["category_main"] = normalized.get("domain", "")
     normalized["category_sub"] = normalized.get("source_table", "")
     normalized["keyword"] = normalized.get("target", "")
-    normalized["apply_period"] = (
-        normalized.get("apply_start_date", "").fillna("").astype(str)
+    built_period = (
+        normalized.get("apply_start_date", pd.Series([""] * len(normalized))).fillna("").astype(str)
         + " ~ "
-        + normalized.get("apply_end_date", "").fillna("").astype(str)
+        + normalized.get("apply_end_date", pd.Series([""] * len(normalized))).fillna("").astype(str)
     ).str.strip(" ~")
+    normalized["apply_period"] = built_period
     normalized["application_url"] = normalized.get("url", "")
     normalized["job_cd"] = normalized.get("employment_status", "")
     normalized["school_cd"] = normalized.get("status", "")
